@@ -1,0 +1,13 @@
+.venv
+__pycache__
+__pytest_cache__
+.idea
+.vscode
+.DS_Store
+.git
+.coverage
+.ruff_cache
+.env
+ruff.toml
+localhost-key.pem
+localhost.pem

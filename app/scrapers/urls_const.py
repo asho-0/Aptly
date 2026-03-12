@@ -1,0 +1,5 @@
+DEGEWO=str
+GEWOBAG=str
+VONOVIA=str
+STADT_UND_LAND=str
+WBM=str
