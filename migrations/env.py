@@ -6,7 +6,7 @@ from sqlalchemy import pool
 from alembic import context
 
 from app.db.models import Base
-from app.db.models import Listing, Filter
+from app.db.models import Listing, Filter, NotifiedListing, User
 from app.config import settings
 
 # this is the Alembic Config object, which provides

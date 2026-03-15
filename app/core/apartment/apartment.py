@@ -1,9 +1,11 @@
+import logging
 from dataclasses import dataclass
 
-from app.core.base_apartment import ApartmentBase, ApartmentFilterBase
+from app.core.apartment.base_apartment import ApartmentBase, ApartmentFilterBase
 from app.core.enums import SocialStatus
 from app.labels import FILTER_LABELS, APARTMENT_LABELS
 
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ApartmentFilter(ApartmentFilterBase):
@@ -35,27 +37,39 @@ class Apartment(ApartmentBase):
     extra_costs: float | None = None
 
     def matches(self, apartment_filter: ApartmentFilterBase) -> bool:
-        if apartment_filter.min_rooms is not None and self.rooms is not None:
-            if self.rooms < apartment_filter.min_rooms:
+        logger.info(f"Matching {self.id}: P:{self.price} R:{self.rooms} S:{self.sqm} against filter")
+
+        if self.price is None:
+            return False
+            
+        min_p = apartment_filter.min_price if apartment_filter.min_price is not None else 0
+        max_p = apartment_filter.max_price if apartment_filter.max_price is not None else 999999
+        
+        if not (min_p <= self.price <= max_p):
+            return False
+
+        if self.rooms is not None:
+            min_r = apartment_filter.min_rooms if apartment_filter.min_rooms is not None else 0
+            max_r = apartment_filter.max_rooms if apartment_filter.max_rooms is not None else 99
+            if not (min_r <= self.rooms <= max_r):
                 return False
-        if apartment_filter.max_rooms is not None and self.rooms is not None:
-            if self.rooms > apartment_filter.max_rooms:
+
+        if self.sqm is not None:
+            min_s = apartment_filter.min_sqm if apartment_filter.min_sqm is not None else 0
+            max_s = apartment_filter.max_sqm if apartment_filter.max_sqm is not None else 999
+            if not (min_s <= self.sqm <= max_s):
                 return False
-        if apartment_filter.min_sqm is not None and self.sqm is not None:
-            if self.sqm < apartment_filter.min_sqm:
-                return False
-        if apartment_filter.max_sqm is not None and self.sqm is not None:
-            if self.sqm > apartment_filter.max_sqm:
-                return False
-        if apartment_filter.min_price is not None and self.price is not None:
-            if self.price < apartment_filter.min_price:
-                return False
-        if apartment_filter.max_price is not None and self.price is not None:
-            if self.price > apartment_filter.max_price:
-                return False
-        if apartment_filter.social_status == SocialStatus.WBS:
-            if self.social_status != SocialStatus.WBS:
-                return False
+        
+        title_lower = self.title.lower()
+        is_wbs_in_title = any(word in title_lower for word in ["wbs", "berechtigungsschein", "stypendium"])
+        is_actually_wbs = (self.social_status == SocialStatus.WBS or is_wbs_in_title)
+
+        if apartment_filter.social_status == SocialStatus.MARKET and is_actually_wbs:
+            return False
+
+        if apartment_filter.social_status == SocialStatus.WBS and not is_actually_wbs:
+            return False
+
         return True
 
     def to_telegram_message(self) -> str:

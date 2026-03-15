@@ -1,13 +1,13 @@
-import asyncio
 import logging
+import typing as t
 from abc import ABC, abstractmethod
-from typing import Any
-from urllib.parse import urlparse, urljoin
+from types import TracebackType
 
+import asyncio
 import aiohttp
 from bs4 import BeautifulSoup, Tag
+from urllib.parse import urlparse, urljoin
 
-import app.seen as seen
 from app.config import settings
 from app.core.apartment import Apartment
 
@@ -43,6 +43,13 @@ class BaseScraper(ABC):
     async def close_session(self) -> None:
         if self._session and not self._session.closed:
             await self._session.close()
+            self._session = None
+    
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type: t.Optional[t.Type[BaseException]], exc_val: t.Optional[BaseException], exc_tb: t.Optional[TracebackType]) -> None:
+        await self.close_session()
 
     def make_id(self, uid: str) -> str:
         return f"{self.slug}:{uid}"
@@ -54,7 +61,7 @@ class BaseScraper(ABC):
         return target.get_text(separator=" ", strip=True) if target else ""
 
     async def _request(
-        self, method: str, url: str, attempt: int = 1, **kwargs: Any
+        self, method: str, url: str, attempt: int = 1, **kwargs: t.Any
     ) -> str | None:
         try:
             timeout = aiohttp.ClientTimeout(total=settings.REQUEST_TIMEOUT)
@@ -63,13 +70,10 @@ class BaseScraper(ABC):
             ) as resp:
                 if resp.status == 200:
                     return await resp.text()
-                logger.warning(
-                    "[%s] %s HTTP %d for %s", self.slug, method, resp.status, url
-                )
+                
+                logger.warning("[%s] %s HTTP %d for %s", self.slug, method, resp.status, url)
         except Exception as exc:
-            logger.warning(
-                "[%s] %s error %s: %s (att %d)", self.slug, method, url, exc, attempt
-            )
+            logger.warning("[%s] %s error %s: %s (att %d)", self.slug, method, url, exc, attempt)
 
         if attempt < settings.MAX_RETRIES:
             await asyncio.sleep(2**attempt)
@@ -114,19 +118,3 @@ class BaseScraper(ABC):
     async def fetch_all(self) -> list[Apartment]:
         pass
 
-    async def fetch_incremental(self) -> list[Apartment]:
-        try:
-            all_apartments = await self.fetch_all()
-            unique_map = {apt.id: apt for apt in all_apartments}
-            new_apartments = [
-                apt for aid, apt in unique_map.items() if seen.is_new(aid)
-            ]
-            logger.info(
-                "[%s] Found %d total. New: %d",
-                self.slug,
-                len(all_apartments),
-                len(new_apartments),
-            )
-            return new_apartments
-        finally:
-            await self.close_session()

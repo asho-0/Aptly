@@ -1,160 +1,128 @@
-import asyncio
 import logging
-from datetime import datetime
+import time
 
+import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
-import app.seen as seen
-from app.bot_commands import UserRegistry, router
+from app.telegram.handlers import UserRegistry
+from app.telegram.handlers.commands_handler import setup_router
+
 from app.config import settings
 from app.db.repositories.listing_repo import ListingRepository
-from app.db.services import ProcessResult, process_apartment
 from app.db.session import db
-from app.logging.structured_logger import scrape_logger
 from app.parsers.site import ALL_SCRAPERS
 from app.telegram.notifier import TelegramNotifier
 from app.logging.structured_logger import setup_daily_logging
+from app.db.services import ListingService
 
 logger = logging.getLogger(__name__)
 
+class ScraperEngine:
+    def __init__(self, notifier: TelegramNotifier, registry: UserRegistry):
+        self.notifier = notifier
+        self.registry = registry
 
-async def warm_seen_cache() -> None:
-    async with db.session_context():
-        uids = await ListingRepository().get_notified_uids()
-    added = seen.warm(uids)
-    logger.info("Seen-cache warmed: %d UIDs (%d added)", len(uids), added)
+    async def run_cycle(self) -> int:
+        active_users = await self.registry.fetch_all_active()
+        if not active_users:
+            return 0
 
+        user_histories: dict[str, set[str]] = {}
+        async with db.session_context():
+            repo = ListingRepository()
+            for chat_id, _ in active_users:
+                user_histories[chat_id] = await repo.get_user_notified_uids(chat_id)
 
-async def run_scrape_cycle(
-    notifier: TelegramNotifier,
-    registry: UserRegistry,
-) -> int:
-    active_users = registry.all_stores()
-    if not active_users:
-        return 0
+        scrapers = [cls() for cls in ALL_SCRAPERS]
+        tasks = [asyncio.create_task(s.fetch_all()) for s in scrapers]
+        scrapers_with_tasks = list(zip(scrapers, tasks))
+        
+        total_notified = 0
+        for scraper, task in scrapers_with_tasks:
+            try:
+                apartments = await task
+                if not apartments:
+                    continue
 
-    scrapers_with_tasks = [
-        (s := cls(), asyncio.create_task(s.fetch_incremental(), name=s.slug))
-        for cls in ALL_SCRAPERS
-    ]
-
-    total_notified = 0
-
-    for scraper, task in scrapers_with_tasks:
-        try:
-            apartments = await task
-            if not apartments:
-                continue
-
-            logger.info(
-                "[%s] %d new listings for evaluation", scraper.slug, len(apartments)
-            )
-
-            async with db.session_context():
-                notified = 0
-                t0 = asyncio.get_event_loop().time()
-
-                for chat_id, store in active_users:
-                    if store.is_paused:
-                        continue
-
+                async with db.session_context():
+                    svc = ListingService()
                     for apt in apartments:
-                        outcome: ProcessResult = await process_apartment(
-                            apt, store.current_filter, chat_id, notifier
-                        )
-                        seen.mark_processed(apt.id)
+                        for chat_id, store in active_users:
+                            if store.is_paused or apt.id in user_histories[chat_id]:
+                                continue
+                            if not apt.matches(store.current_filter):
+                                continue
+                            
+                            outcome = await svc.process_apartment(
+                                apt, store.current_filter, chat_id, self.notifier
+                            )
 
-                        if outcome.notified:
-                            notified += 1
-                            total_notified += 1
-                            await asyncio.sleep(0.5)
+                            if outcome.notified:
+                                user_histories[chat_id].add(apt.id)
+                                total_notified += 1
+                                await asyncio.sleep(0.3)
 
-                elapsed = asyncio.get_event_loop().time() - t0
-                logger.info("[%s] done: notified=%d", scraper.slug, notified)
+                logger.info("[%s] cycle done: processed %d apartments", scraper.slug, len(apartments))
+            except Exception as exc:
+                logger.error("[%s] fatal error: %s", scraper.slug, exc)
+            finally:
+                await scraper.close_session()
 
-                scrape_logger.log_scrape_run_finished(
-                    source_slug=scraper.slug,
-                    source_name=scraper.name,
-                    duration_seconds=elapsed,
-                    listings_found=len(apartments),
-                    listings_new=notified,
-                )
+        return total_notified
 
-        except Exception as exc:
-            logger.error("[%s] fatal error: %s", scraper.slug, exc)
-            continue
+    async def start_loop(self) -> None:
+        cycle = 0
+        while True:
+            cycle += 1
+            logger.info("── Cycle #%d start ──", cycle)
+            t0 = time.perf_counter()
+            try:
+                new_count = await self.run_cycle()
+                duration = time.perf_counter() - t0
+                logger.info("── Cycle #%d end: %d notified in %.1fs ──", cycle, new_count, duration)
+            except Exception as exc:
+                logger.exception("Cycle #%d failed: %s", cycle, exc)
 
-    return total_notified
+            await asyncio.sleep(settings.CHECK_INTERVAL_SECONDS)
 
 
-async def scrape_loop(notifier: TelegramNotifier, registry: UserRegistry) -> None:
-    cycle = 0
-    while True:
-        cycle += 1
-        logger.info("── Cycle #%d at %s ──", cycle, datetime.now().strftime("%H:%M:%S"))
-        t0 = asyncio.get_event_loop().time()
+class Application:
+    def __init__(self):
+        self.bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+        self.dp = Dispatcher(storage=MemoryStorage())
+        self.registry = UserRegistry()
+        self.notifier = TelegramNotifier(self.bot)
+        self.engine = ScraperEngine(self.notifier, self.registry)
+
+    async def run(self) -> None:
+        settings.setup_logging()
+        # setup_daily_logging()
+        logger.info("Starting up multi-user scraper...")
+        
+        await db.init()
+
+        main_router = setup_router(self.registry, self.notifier)
+        self.dp.include_router(main_router)
+        scrape_task = asyncio.create_task(self.engine.start_loop())
+
         try:
-            new_count = await run_scrape_cycle(notifier, registry)
-            logger.info(
-                "── Cycle #%d done: %d new in %.1fs ──",
-                cycle,
-                new_count,
-                asyncio.get_event_loop().time() - t0,
+            await self.dp.start_polling(
+                self.bot,
+                allowed_updates=["message"],
+                registry=self.registry,
+                notifier=self.notifier,
             )
-        except Exception as exc:
-            logger.exception("Cycle #%d error: %s", cycle, exc)
-
-        await asyncio.sleep(settings.CHECK_INTERVAL_SECONDS)
-
-
-async def main() -> None:
-    # settings.setup_logging()
-    setup_daily_logging()
-    logger.info("=" * 60)
-    logger.info(
-        "Starting up... DB: %s:%s/%s | Interval: %ds",
-        settings.DB_HOST,
-        settings.DB_PORT,
-        settings.DB_NAME,
-        settings.CHECK_INTERVAL_SECONDS,
-    )
-    logger.info("=" * 60)
-
-    await db.init()
-    await warm_seen_cache()
-
-    registry = UserRegistry()
-    await registry.get_or_create(settings.TELEGRAM_CHAT_ID)
-
-    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
-    dp = Dispatcher(storage=MemoryStorage())
-    dp.include_router(router)
-
-    notifier = TelegramNotifier(bot)
-
-    await notifier.send_startup_message(
-        int(settings.TELEGRAM_CHAT_ID), [cls.name for cls in ALL_SCRAPERS]
-    )
-
-    scrape_task = asyncio.create_task(scrape_loop(notifier, registry))
-
-    try:
-        await dp.start_polling(
-            bot,
-            allowed_updates=["message"],
-            registry=registry,
-            notifier=notifier,
-        )
-    finally:
-        scrape_task.cancel()
-        await bot.session.close()
-        await db.close()
-        logger.info("Stopped.")
+        finally:
+            scrape_task.cancel()
+            await self.bot.session.close()
+            await db.close()
+            logger.info("Shutdown complete.")
 
 
 if __name__ == "__main__":
+    app = Application()
     try:
-        asyncio.run(main())
+        asyncio.run(app.run())
     except (KeyboardInterrupt, SystemExit):
-        logger.info("Process interrupted.")
+        pass

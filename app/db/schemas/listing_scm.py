@@ -62,6 +62,7 @@ class UpsertListingRequest(BaseModel):
 class MarkNotifiedRequest(BaseModel):
     listing_db_id: int
     chat_id: str
+    uid: str
 
 
 class GetNotifiedUIDsRequest(BaseModel):
