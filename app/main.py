@@ -1,190 +1,160 @@
-# ============================================================
-# main.py — Async scheduler + entry point
-#
-# Dependency flow:
-#   main.py
-#     └── services/
-#           ├── ListingService   (upsert + notify)
-#           ├── ScrapeRunService (health tracking)
-#           ├── FilterService    (load saved filter)
-#           └── CacheService     (Redis warm-up + cleanup)
-#
-# main.py never imports from repositories/ or schemas/ directly.
-# ============================================================
-
 import asyncio
 import logging
-import signal
 from datetime import datetime
 
-import aiohttp
+from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
 
-from bot_commands import CommandHandler, FilterStore
-from cache import seen_store
-from config import settings
-from db.database import db
-from telegram.notifier import TelegramNotifier
-from scrapers import ALL_SCRAPERS
-from db.services import (
-    CacheService,
-    FilterService,
-    ListingService,
-    ProcessResult,
-    ScrapeRunService,
-)
+import app.seen as seen
+from app.bot_commands import UserRegistry, router
+from app.config import settings
+from app.db.repositories.listing_repo import ListingRepository
+from app.db.services import ProcessResult, process_apartment
+from app.db.session import db
+from app.logging.structured_logger import scrape_logger
+from app.parsers.site import ALL_SCRAPERS
+from app.telegram.notifier import TelegramNotifier
+from app.logging.structured_logger import setup_daily_logging
 
-logger = logging.getLogger("main")
-
-CLEANUP_INTERVAL_SECONDS = 60 * 60 * 24   # run Redis cleanup once per day
+logger = logging.getLogger(__name__)
 
 
-async def run_check(
-    http:          aiohttp.ClientSession,
-    notifier:      TelegramNotifier,
-    filter_store:  FilterStore,
-    listing_svc:   ListingService,
-    run_svc:       ScrapeRunService,
+async def warm_seen_cache() -> None:
+    async with db.session_context():
+        uids = await ListingRepository().get_notified_uids()
+    added = seen.warm(uids)
+    logger.info("Seen-cache warmed: %d UIDs (%d added)", len(uids), added)
+
+
+async def run_scrape_cycle(
+    notifier: TelegramNotifier,
+    registry: UserRegistry,
 ) -> int:
-    if filter_store.paused:
-        logger.info("Notifications paused — skipping check.")
+    active_users = registry.all_stores()
+    if not active_users:
         return 0
 
-    current_filter = filter_store.filter
-    scrapers = [cls(http) for cls in ALL_SCRAPERS]
-    tasks    = [asyncio.create_task(s.fetch_all(), name=s.slug) for s in scrapers]
-    results  = await asyncio.gather(*tasks, return_exceptions=True)
+    scrapers_with_tasks = [
+        (s := cls(), asyncio.create_task(s.fetch_incremental(), name=s.slug))
+        for cls in ALL_SCRAPERS
+    ]
 
     total_notified = 0
 
-    for scraper, result in zip(scrapers, results):
-        if isinstance(result, Exception):
-            logger.error("[%s] Scraper error: %s", scraper.slug, result)
+    for scraper, task in scrapers_with_tasks:
+        try:
+            apartments = await task
+            if not apartments:
+                continue
+
+            logger.info(
+                "[%s] %d new listings for evaluation", scraper.slug, len(apartments)
+            )
+
+            async with db.session_context():
+                notified = 0
+                t0 = asyncio.get_event_loop().time()
+
+                for chat_id, store in active_users:
+                    if store.is_paused:
+                        continue
+
+                    for apt in apartments:
+                        outcome: ProcessResult = await process_apartment(
+                            apt, store.current_filter, chat_id, notifier
+                        )
+                        seen.mark_processed(apt.id)
+
+                        if outcome.notified:
+                            notified += 1
+                            total_notified += 1
+                            await asyncio.sleep(0.5)
+
+                elapsed = asyncio.get_event_loop().time() - t0
+                logger.info("[%s] done: notified=%d", scraper.slug, notified)
+
+                scrape_logger.log_scrape_run_finished(
+                    source_slug=scraper.slug,
+                    source_name=scraper.name,
+                    duration_seconds=elapsed,
+                    listings_found=len(apartments),
+                    listings_new=notified,
+                )
+
+        except Exception as exc:
+            logger.error("[%s] fatal error: %s", scraper.slug, exc)
             continue
-
-        apartments = result
-        logger.info("[%s] %d listings fetched", scraper.slug, len(apartments))
-
-        async with db.session_context():
-            run_id     = await run_svc.begin(scraper.slug)
-            notified   = 0
-
-            try:
-                for apt in apartments:
-                    outcome: ProcessResult = await listing_svc.process(
-                        apt      = apt,
-                        filt     = current_filter,
-                        chat_id  = settings.TELEGRAM_CHAT_ID,
-                        notifier = notifier,
-                    )
-                    if outcome.notified:
-                        notified       += 1
-                        total_notified += 1
-                        await asyncio.sleep(0.5)   # stay under Telegram rate limit
-
-                await run_svc.finish(run_id, found=len(apartments), new=notified)
-
-            except Exception as exc:
-                logger.exception("[%s] Processing error: %s", scraper.slug, exc)
-                await run_svc.finish(run_id, found=len(apartments), new=notified, error=str(exc))
-                raise
 
     return total_notified
 
 
-async def cleanup_loop(cache_svc: CacheService) -> None:
-    """Daily background task — removes stale entries from Redis."""
+async def scrape_loop(notifier: TelegramNotifier, registry: UserRegistry) -> None:
+    cycle = 0
     while True:
-        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
-        await cache_svc.run_cleanup()
+        cycle += 1
+        logger.info("── Cycle #%d at %s ──", cycle, datetime.now().strftime("%H:%M:%S"))
+        t0 = asyncio.get_event_loop().time()
+        try:
+            new_count = await run_scrape_cycle(notifier, registry)
+            logger.info(
+                "── Cycle #%d done: %d new in %.1fs ──",
+                cycle,
+                new_count,
+                asyncio.get_event_loop().time() - t0,
+            )
+        except Exception as exc:
+            logger.exception("Cycle #%d error: %s", cycle, exc)
+
+        await asyncio.sleep(settings.CHECK_INTERVAL_SECONDS)
 
 
 async def main() -> None:
-    settings.setup_logging()
+    # settings.setup_logging()
+    setup_daily_logging()
     logger.info("=" * 60)
-    logger.info("Apartment notifier starting up ...")
     logger.info(
-        "DB: %s:%s/%s | Redis: %s:%s/%s | Interval: %ds",
-        settings.DB_HOST,    settings.DB_PORT,    settings.DB_NAME,
-        settings.REDIS_HOST, settings.REDIS_PORT, settings.REDIS_DB,
+        "Starting up... DB: %s:%s/%s | Interval: %ds",
+        settings.DB_HOST,
+        settings.DB_PORT,
+        settings.DB_NAME,
         settings.CHECK_INTERVAL_SECONDS,
     )
     logger.info("=" * 60)
 
-    # ── Instantiate services ──────────────────────────────────
-    filter_svc   = FilterService()
-    listing_svc  = ListingService()
-    run_svc      = ScrapeRunService()
-    cache_svc    = CacheService()
-
-    # ── Connect infrastructure ────────────────────────────────
     await db.init()
-    await seen_store.connect()
+    await warm_seen_cache()
 
-    # ── Warm Redis from DB ────────────────────────────────────
-    await cache_svc.warm_from_db()
+    registry = UserRegistry()
+    await registry.get_or_create(settings.TELEGRAM_CHAT_ID)
 
-    # ── Load saved filter ─────────────────────────────────────
-    saved = await filter_svc.load(settings.TELEGRAM_CHAT_ID)
-    if saved:
-        initial_filter, initial_paused = saved
-    else:
-        initial_filter = filter_svc.build_default()
-        initial_paused = False
+    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.include_router(router)
 
-    filter_store = FilterStore(
-        initial_filter = initial_filter,
-        initial_paused = initial_paused,
+    notifier = TelegramNotifier(bot)
+
+    await notifier.send_startup_message(
+        int(settings.TELEGRAM_CHAT_ID), [cls.name for cls in ALL_SCRAPERS]
     )
 
-    # ── Graceful shutdown ─────────────────────────────────────
-    stop_event = asyncio.Event()
+    scrape_task = asyncio.create_task(scrape_loop(notifier, registry))
 
-    def _shutdown(sig, _frame) -> None:
-        logger.info("Signal %s received — shutting down ...", sig.name)
-        stop_event.set()
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(sig, _shutdown)
-
-    # ── Main loop ─────────────────────────────────────────────
-    connector = aiohttp.TCPConnector(limit=20, ssl=False)
-    async with aiohttp.ClientSession(connector=connector) as http:
-        notifier    = TelegramNotifier(http)
-        cmd_handler = CommandHandler(http, filter_store)
-
-        bg_tasks = [
-            asyncio.create_task(cmd_handler.poll_loop(),        name="cmd_poll"),
-            asyncio.create_task(cleanup_loop(cache_svc),        name="redis_cleanup"),
-        ]
-
-        await notifier.send_startup_message([cls.name for cls in ALL_SCRAPERS])  # type: ignore
-
-        iteration = 0
-        while not stop_event.is_set():
-            iteration += 1
-            logger.info("── Check #%d at %s ──", iteration, datetime.now().strftime("%H:%M:%S"))
-            start = asyncio.get_event_loop().time()
-            try:
-                new     = await run_check(http, notifier, filter_store, listing_svc, run_svc)
-                elapsed = asyncio.get_event_loop().time() - start
-                logger.info("── #%d done: %d new listings in %.1fs ──", iteration, new, elapsed)
-            except Exception as exc:
-                logger.exception("Error during check #%d: %s", iteration, exc)
-
-            try:
-                await asyncio.wait_for(
-                    stop_event.wait(), timeout=settings.CHECK_INTERVAL_SECONDS
-                )
-            except asyncio.TimeoutError:
-                pass
-
-        for task in bg_tasks:
-            task.cancel()
-
-    await seen_store.close()
-    await db.close()
-    logger.info("Bot stopped. Goodbye.")
+    try:
+        await dp.start_polling(
+            bot,
+            allowed_updates=["message"],
+            registry=registry,
+            notifier=notifier,
+        )
+    finally:
+        scrape_task.cancel()
+        await bot.session.close()
+        await db.close()
+        logger.info("Stopped.")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Process interrupted.")

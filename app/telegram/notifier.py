@@ -1,105 +1,53 @@
-# ============================================================
-# notifier.py — Async Telegram notifier
-# ============================================================
-
-import asyncio
 import logging
 
-import aiohttp
+from aiogram import Bot
+from aiogram.exceptions import TelegramAPIError
 
-from config import settings
-from models import Apartment
+from app.core.apartment import Apartment
 
 logger = logging.getLogger(__name__)
 
-TELEGRAM_API = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}"
+_MAX_CAPTION = 1024
+_MAX_MESSAGE = 4096
 
 
 class TelegramNotifier:
-    def __init__(self, session: aiohttp.ClientSession):
-        self.session   = session
-        self.chat_id   = settings.TELEGRAM_CHAT_ID
-        self._msg_lock = asyncio.Semaphore(1)   # serialize sends to avoid flood
+    def __init__(self, bot: Bot) -> None:
+        self._bot = bot
 
-    async def send_apartment(self, apt: Apartment) -> bool:
-        """Send a single apartment notification. Returns True on success."""
-        text = apt.to_telegram_message()
-        return await self._send_message(text, photo_url=apt.image_url)
-
-    async def send_text(self, text: str) -> bool:
-        return await self._send_message(text)
-
-    async def send_startup_message(self, scraper_names: list[str]) -> None:
-        names = "\n  • " + "\n  • ".join(scraper_names)
-        msg   = (
-            "🤖 <b>Apartment Notifier started!</b>\n\n"
-            f"Monitoring {len(scraper_names)} sources:{names}\n\n"
-            "You will be notified of new listings matching your filters."
-        )
-        await self.send_text(msg)
-
-    # ── Internal helpers ──────────────────────────────────────
-
-    async def _send_message(
-        self,
-        text: str,
-        photo_url: str | None = None,
-        attempt: int = 1,
-    ) -> bool:
-        async with self._msg_lock:
+    async def send_apartment(self, chat_id: int, apartment: Apartment) -> bool:
+        text = apartment.to_telegram_message()
+        if apartment.image_url:
             try:
-                if photo_url:
-                    ok = await self._send_photo(photo_url, text)
-                    if ok:
-                        return True
-                # Fallback to plain message (or primary if no photo)
-                return await self._send_plain(text)
-            except Exception as exc:
-                logger.error("Telegram send error (attempt %d): %s", attempt, exc)
-                if attempt < 3:
-                    await asyncio.sleep(2 ** attempt)
-                    return await self._send_message(text, photo_url, attempt + 1)
-                return False
+                await self._bot.send_photo(
+                    chat_id,
+                    apartment.image_url,
+                    caption=text[:_MAX_CAPTION],
+                    parse_mode="HTML",
+                )
+                return True
+            except TelegramAPIError:
+                pass
+        return await self.send_text(chat_id, text)
 
-    async def _send_plain(self, text: str) -> bool:
-        url    = f"{TELEGRAM_API}/sendMessage"
-        # Telegram max message length is 4096
-        chunks = [text[i:i+4096] for i in range(0, len(text), 4096)]
-        for chunk in chunks:
-            payload: dict[str, int | str | bool] = {
-                "chat_id":    self.chat_id,
-                "text":       chunk,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": False,
-            }
-            async with self.session.post(
-                url,
-                json    = payload,
-                timeout = aiohttp.ClientTimeout(total=settings.REQUEST_TIMEOUT),
-            ) as resp:
-                data = await resp.json()
-                if not data.get("ok"):
-                    logger.warning("Telegram API error: %s", data)
-                    return False
-            await asyncio.sleep(0.3)   # stay under 30 msg/sec limit
-        return True
-
-    async def _send_photo(self, photo_url: str, caption: str) -> bool:
-        url     = f"{TELEGRAM_API}/sendPhoto"
-        caption = caption[:1024]       # Telegram caption limit
-        payload = {
-            "chat_id":    self.chat_id,
-            "photo":      photo_url,
-            "caption":    caption,
-            "parse_mode": "HTML",
-        }
+    async def send_text(self, chat_id: int, text: str) -> bool:
         try:
-            async with self.session.post(
-                url,
-                json    = payload,
-                timeout = aiohttp.ClientTimeout(total=settings.REQUEST_TIMEOUT),
-            ) as resp:
-                data = await resp.json()
-                return bool(data.get("ok"))
-        except Exception:
+            for chunk in [
+                text[i : i + _MAX_MESSAGE] for i in range(0, len(text), _MAX_MESSAGE)
+            ]:
+                await self._bot.send_message(
+                    chat_id, chunk, parse_mode="HTML", disable_web_page_preview=False
+                )
+            return True
+        except TelegramAPIError as e:
+            logger.error("send_text to %s failed: %s", chat_id, e)
             return False
+
+    async def send_startup_message(
+        self, chat_id: int, scraper_names: list[str]
+    ) -> None:
+        names = "\n  • " + "\n  • ".join(scraper_names)
+        await self.send_text(
+            chat_id,
+            f"🤖 Apartment Notifier started!\n\nMonitoring {len(scraper_names)} sources:{names}\n\nSend /help for commands.",
+        )

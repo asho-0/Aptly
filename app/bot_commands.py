@@ -1,344 +1,315 @@
-# ============================================================
-# bot_commands.py — Telegram command handler
-#
-# Dependency flow:
-#   CommandHandler → FilterService  (filter read/write)
-#                 → StatsService    (/stats command)
-#
-# Never imports from repositories/ or schemas/ directly.
-# ============================================================
-
 import asyncio
+from asyncio import Task
 import logging
-from typing import Optional
+from typing import Any
 
-import aiohttp
+from aiogram import Router
+from aiogram.filters import Command
+from aiogram.types import Message
 
-from app_models import ApartmentFilter
-from config import settings
-from db.services import FilterService, FullStatsResponse, StatsService
-from db.schemas.filter import UpdateKeywordsRequest
+import app.seen as seen
+from app.config import settings
+from app.core.apartment import ApartmentFilter
+from app.core.enums import SocialStatus
+from app.db.services import (
+    apply_range_update,
+    apply_status_update,
+    build_default_filter,
+    load_filter,
+    preview_apartment,
+    save_filter,
+)
+from app.labels import TRANSLATIONS
+from app.telegram.notifier import TelegramNotifier
 
 logger = logging.getLogger(__name__)
-
-TELEGRAM_API = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}"
-
-# ── User-facing strings (EN / RU) ─────────────────────────────
-T: dict[str, dict[str, str]] = {
-    "en": {
-        "filter_updated":  "✅ Filter updated!",
-        "paused":          "⏸ Notifications paused. Send /resume to continue.",
-        "resumed":         "▶️ Notifications resumed!",
-        "reset_done":      "🔄 Filters reset to defaults.",
-        "unknown_cmd":     "❓ Unknown command. Send /help for the list.",
-        "invalid_value":   "⚠️ Invalid value — please enter a number.",
-        "status_options":  (
-            "Valid options: <code>any</code> | <code>market</code> | "
-            "<code>wbs</code> | <code>sozialwohnung</code> | <code>staffelmiete</code>"
-        ),
-        "no_stats":        "📊 Statistics are not available right now.",
-        "lang_changed":    "🌐 Language set to English.",
-        "lang_invalid":    "⚠️ Supported languages: <code>en</code>, <code>ru</code>",
-        "help": (
-            "🤖 <b>Available commands:</b>\n\n"
-            "/filter              – show active filters\n"
-            "/rooms  1 3          – set room range (min max)\n"
-            "/price  500 1500     – set rent range in € (min max)\n"
-            "/area   40 100       – set area range in m² (min max)\n"
-            "/status wbs          – set social status filter\n"
-            "   <i>any | market | wbs | sozialwohnung | staffelmiete</i>\n"
-            "/keywords +balcony -garage  – add/remove keywords\n"
-            "/pause               – pause notifications\n"
-            "/resume              – resume notifications\n"
-            "/stats               – DB + Redis statistics\n"
-            "/lang en             – switch language (en / ru)\n"
-            "/reset               – reset all filters to defaults\n"
-            "/help                – this message"
-        ),
-        "startup": (
-            "🤖 <b>Apartment Notifier started!</b>\n\n"
-            "Monitoring <b>{count}</b> German real-estate sources.\n"
-            "Send /help to see available commands."
-        ),
-    },
-    "ru": {
-        "filter_updated":  "✅ Фильтр обновлён!",
-        "paused":          "⏸ Уведомления приостановлены. Отправьте /resume для продолжения.",
-        "resumed":         "▶️ Уведомления возобновлены!",
-        "reset_done":      "🔄 Фильтры сброшены до стандартных значений.",
-        "unknown_cmd":     "❓ Неизвестная команда. Отправьте /help для списка.",
-        "invalid_value":   "⚠️ Неверное значение — введите число.",
-        "status_options":  (
-            "Допустимые значения: <code>any</code> | <code>market</code> | "
-            "<code>wbs</code> | <code>sozialwohnung</code> | <code>staffelmiete</code>"
-        ),
-        "no_stats":        "📊 Статистика временно недоступна.",
-        "lang_changed":    "🌐 Язык установлен: Русский.",
-        "lang_invalid":    "⚠️ Поддерживаемые языки: <code>en</code>, <code>ru</code>",
-        "help": (
-            "🤖 <b>Доступные команды:</b>\n\n"
-            "/filter              – показать активные фильтры\n"
-            "/rooms  1 3          – количество комнат\n"
-            "/price  500 1500     – аренда в €/мес\n"
-            "/area   40 100       – площадь м²\n"
-            "/status wbs          – фильтр по типу жилья\n"
-            "   <i>any | market | wbs | sozialwohnung | staffelmiete</i>\n"
-            "/keywords +балкон -гараж  – ключевые слова\n"
-            "/pause               – приостановить уведомления\n"
-            "/resume              – возобновить уведомления\n"
-            "/stats               – статистика БД и Redis\n"
-            "/lang ru             – сменить язык\n"
-            "/reset               – сбросить фильтры\n"
-            "/help                – эта справка"
-        ),
-        "startup": (
-            "🤖 <b>Бот по поиску квартир запущен!</b>\n\n"
-            "Отслеживаю <b>{count}</b> немецких сайтов недвижимости.\n"
-            "Отправьте /help для списка команд."
-        ),
-    },
-}
+router = Router()
 
 
-def t(key: str, lang: str | None = None, **kwargs) -> str:
-    lang   = lang or settings.BOT_LANGUAGE
-    result = T.get(lang, T["en"]).get(key) or T["en"].get(key, key)
+def translate(key: str, **kwargs: Any) -> str:
+    lang = settings.BOT_LANGUAGE
+    result = TRANSLATIONS.get(lang, TRANSLATIONS["en"]).get(key) or TRANSLATIONS[
+        "en"
+    ].get(key, key)
     return result.format(**kwargs) if kwargs else result
 
 
-# ─────────────────────────────────────────────────────────────
-class FilterStore:
-    """
-    In-memory filter state. Persistence delegated to FilterService.
-    Passed by reference into CommandHandler and main.run_check().
-    """
+def parse_range_args(raw_args: list[str]) -> list[str]:
+    combined = " ".join(raw_args)
+    for dash in ("–", "—", "-"):
+        combined = combined.replace(dash, " ")
+    return [p for p in combined.split() if p]
 
+
+class FilterStore:
     def __init__(
         self,
-        initial_filter: Optional[ApartmentFilter] = None,
+        chat_id: str,
+        initial_filter: ApartmentFilter | None = None,
         initial_paused: bool = False,
-    ) -> None:
-        self._svc    = FilterService()
-        self._filter = initial_filter or self._svc.build_default()
+    ):
+        self._chat_id = chat_id
+        self._filter = initial_filter or build_default_filter()
         self._paused = initial_paused
 
     @property
-    def filter(self) -> ApartmentFilter:
+    def current_filter(self) -> ApartmentFilter:
         return self._filter
 
     @property
-    def paused(self) -> bool:
+    def is_paused(self) -> bool:
         return self._paused
 
-    def set_paused(self, value: bool) -> None:
-        self._paused = value
-        asyncio.ensure_future(
-            self._svc.set_paused(self._filter, settings.TELEGRAM_CHAT_ID, value)
-        )
+    def set_paused(self, paused: bool) -> None:
+        self._paused = paused
+        asyncio.ensure_future(save_filter(self._chat_id, self._filter, paused))
 
-    def reset(self) -> None:
-        self._filter = self._svc.build_default()
+    def reset_to_defaults(self) -> None:
+        self._filter = build_default_filter()
         self._paused = False
-        asyncio.ensure_future(
-            self._svc.save(settings.TELEGRAM_CHAT_ID, self._filter, self._paused)
-        )
-
-    def save(self) -> None:
-        asyncio.ensure_future(
-            self._svc.save(settings.TELEGRAM_CHAT_ID, self._filter, self._paused)
-        )
-
-    @property
-    def service(self) -> FilterService:
-        return self._svc
+        asyncio.ensure_future(save_filter(self._chat_id, self._filter, self._paused))
 
 
-# ─────────────────────────────────────────────────────────────
-class CommandHandler:
+class UserRegistry:
+    def __init__(self) -> None:
+        self._stores: dict[str, FilterStore] = {}
+        self._lock = asyncio.Lock()
 
-    def __init__(self, session: aiohttp.ClientSession, store: FilterStore) -> None:
-        self.session    = session
-        self.store      = store
-        self._stats_svc = StatsService()
-        self._offset    = 0
+    async def get_or_create(self, chat_id: str) -> FilterStore:
+        async with self._lock:
+            if chat_id in self._stores:
+                return self._stores[chat_id]
+            saved = await load_filter(chat_id)
+            if saved:
+                filt, paused = saved
+            else:
+                filt, paused = build_default_filter(), False
+            store = FilterStore(chat_id, filt, paused)
+            self._stores[chat_id] = store
+            logger.info("Registered chat_id=%s", chat_id)
+            return store
 
-    async def poll_loop(self) -> None:
-        logger.info("Telegram command polling started")
-        while True:
-            try:
-                await self._poll_once()
-            except Exception as exc:
-                logger.warning("Command poll error: %s", exc)
-            await asyncio.sleep(2)
+    def all_stores(self) -> list[tuple[str, FilterStore]]:
+        return list(self._stores.items())
 
-    async def _poll_once(self) -> None:
-        params = {"timeout": 10, "offset": self._offset, "allowed_updates": ["message"]}
-        async with self.session.get(
-            f"{TELEGRAM_API}/getUpdates",
-            params  = params,
-            timeout = aiohttp.ClientTimeout(total=15),
-        ) as resp:
-            data = await resp.json()
-        if not data.get("ok"):
-            return
-        for update in data.get("result", []):
-            self._offset = update["update_id"] + 1
-            msg = update.get("message", {})
-            if str(msg.get("chat", {}).get("id")) != str(settings.TELEGRAM_CHAT_ID):
+
+_preview_tasks: dict[str, Task[None]] = {}
+
+
+def _start_preview(
+    chat_id: str,
+    store: FilterStore,
+    notifier: TelegramNotifier,
+) -> None:
+    existing = _preview_tasks.get(chat_id)
+    if existing and not existing.done():
+        existing.cancel()
+
+    task = asyncio.create_task(_run_preview(chat_id, store, notifier))
+    _preview_tasks[chat_id] = task
+
+    def _remove_task(_: Any) -> None:
+        _preview_tasks.pop(chat_id, None)
+
+    task.add_done_callback(_remove_task)
+
+
+async def _run_preview(
+    chat_id: str,
+    store: FilterStore,
+    notifier: TelegramNotifier,
+) -> None:
+    from app.parsers.site import ALL_SCRAPERS
+
+    scrapers = [cls() for cls in ALL_SCRAPERS]
+    results = await asyncio.gather(
+        *[s.fetch_all() for s in scrapers], return_exceptions=True
+    )
+
+    await asyncio.gather(*[s.close_session() for s in scrapers])
+
+    found = 0
+    for result in results:
+        if isinstance(result, BaseException):
+            logger.error("preview error: %s", result)
+            continue
+
+        for apt in result:
+            if seen.is_already_notified(apt.id):
                 continue
-            text = msg.get("text", "").strip()
-            if text.startswith("/"):
-                await self._dispatch(text)
-
-    async def _dispatch(self, text: str) -> None:
-        parts = text.split()
-        cmd   = parts[0].lower().split("@")[0]
-        args  = parts[1:]
-        lang  = settings.BOT_LANGUAGE
-
-        logger.debug("Received command: %s args=%s", cmd, args)
-
-        if cmd in ("/help", "/start"):
-            await self._reply(t("help"))
-
-        elif cmd == "/filter":
-            await self._reply(self.store.filter.summary(lang))
-
-        elif cmd == "/rooms":
-            ok = await self.store.service.apply_range_update(
-                self.store.filter, settings.TELEGRAM_CHAT_ID, "rooms", args, int
+            sent = await preview_apartment(
+                apt, store.current_filter, notifier, int(chat_id)
             )
-            await self._reply(
-                t("filter_updated") + "\n\n" + self.store.filter.summary(lang)
-                if ok else t("invalid_value")
-            )
+            if sent:
+                seen.mark_notified(apt.id)
+                found += 1
+                await asyncio.sleep(0.5)
 
-        elif cmd == "/price":
-            ok = await self.store.service.apply_range_update(
-                self.store.filter, settings.TELEGRAM_CHAT_ID, "price", args, float
-            )
-            await self._reply(
-                t("filter_updated") + "\n\n" + self.store.filter.summary(lang)
-                if ok else t("invalid_value")
-            )
+    if found == 0:
+        await notifier.send_text(int(chat_id), translate("preview_none"))
 
-        elif cmd == "/area":
-            ok = await self.store.service.apply_range_update(
-                self.store.filter, settings.TELEGRAM_CHAT_ID, "area", args, float
-            )
-            await self._reply(
-                t("filter_updated") + "\n\n" + self.store.filter.summary(lang)
-                if ok else t("invalid_value")
-            )
 
-        elif cmd == "/status":
-            ok = await self.store.service.apply_status_update(
-                self.store.filter, settings.TELEGRAM_CHAT_ID,
-                args[0].lower() if args else "",
-            )
-            await self._reply(
-                t("filter_updated") + "\n\n" + self.store.filter.summary(lang)
-                if ok else t("status_options")
-            )
+async def _after_update(
+    message: Message,
+    ok: bool,
+    store: FilterStore,
+    notifier: TelegramNotifier,
+) -> None:
+    if not ok:
+        await message.answer(translate("invalid_value"))
+        return
+    chat_id = str(message.chat.id)
 
-        elif cmd == "/keywords":
-            add    = [a[1:] for a in args if a.startswith("+")]
-            remove = [a[1:] for a in args if a.startswith("-")]
-            req    = UpdateKeywordsRequest(chat_id=settings.TELEGRAM_CHAT_ID, add=add, remove=remove)
-            await self.store.service.apply_keyword_update(
-                self.store.filter, settings.TELEGRAM_CHAT_ID, req
-            )
-            await self._reply(t("filter_updated") + "\n\n" + self.store.filter.summary(lang))
+    cleared_count = seen.reset_notified()
+    logger.info(
+        "Filter changed: cleared %d processed IDs for re-evaluation", cleared_count
+    )
 
-        elif cmd == "/pause":
-            self.store.set_paused(True)
-            await self._reply(t("paused"))
+    msg_text = (
+        translate("filter_updated")
+        + "\n\n"
+        + store.current_filter.summary(settings.BOT_LANGUAGE)
+    )
+    await message.answer(msg_text)
 
-        elif cmd == "/resume":
-            self.store.set_paused(False)
-            await self._reply(t("resumed"))
+    if not store.is_paused:
+        await message.answer(translate("preview_searching"))
+        _start_preview(chat_id, store, notifier)
 
-        elif cmd == "/stats":
-            await self._send_stats()
 
-        elif cmd == "/lang":
-            await self._change_lang(args)
+@router.message(Command("start", "help"))
+async def cmd_help(message: Message, registry: UserRegistry) -> None:
+    await registry.get_or_create(str(message.chat.id))
+    await message.answer(translate("help"))
 
-        elif cmd == "/reset":
-            self.store.reset()
-            await self._reply(t("reset_done") + "\n\n" + self.store.filter.summary(lang))
 
-        else:
-            await self._reply(t("unknown_cmd"))
+@router.message(Command("filter"))
+async def cmd_filter(message: Message, registry: UserRegistry) -> None:
+    store = await registry.get_or_create(str(message.chat.id))
+    await message.answer(store.current_filter.summary(settings.BOT_LANGUAGE))
 
-    async def _send_stats(self) -> None:
-        try:
-            stats: FullStatsResponse = await self._stats_svc.get_full_stats()
-        except Exception as exc:
-            logger.error("Failed to fetch stats: %s", exc)
-            await self._reply(t("no_stats") + f"\n<code>{exc}</code>")
-            return
 
-        lang = settings.BOT_LANGUAGE
-        if lang == "ru":
-            lines = [
-                "📈 <b>Статистика:</b>", "",
-                "🗄 <b>PostgreSQL:</b>",
-                f"  📦 Объявлений всего:  <b>{stats.total_all_time}</b>",
-                f"  🆕 Новых сегодня:     <b>{stats.total_today}</b>",
-                "",
-                "⚡️ <b>Redis-кэш:</b>",
-                f"  👁 Просмотренных:     <b>{stats.redis_seen_count}</b>",
-                f"  🪞 Локальное зеркало: <b>{stats.redis_local_mirror}</b>",
-                f"  💾 Память:            <b>{stats.redis_memory_mb} МБ</b>",
-                "",
-                "💰 <b>Цены по источнику:</b>",
-            ]
-            room_label = "комн."
-        else:
-            lines = [
-                "📈 <b>Statistics:</b>", "",
-                "🗄 <b>PostgreSQL:</b>",
-                f"  📦 Total listings:    <b>{stats.total_all_time}</b>",
-                f"  🆕 New today:         <b>{stats.total_today}</b>",
-                "",
-                "⚡️ <b>Redis cache:</b>",
-                f"  👁 Seen UIDs:         <b>{stats.redis_seen_count}</b>",
-                f"  🪞 Local mirror:      <b>{stats.redis_local_mirror}</b>",
-                f"  💾 Memory:            <b>{stats.redis_memory_mb} MB</b>",
-                "",
-                "💰 <b>Prices by source:</b>",
-            ]
-            room_label = "rooms"
+@router.message(Command("rooms"))
+async def cmd_rooms(
+    message: Message,
+    registry: UserRegistry,
+    notifier: TelegramNotifier,
+) -> None:
+    chat_id = str(message.chat.id)
+    store = await registry.get_or_create(chat_id)
+    text = message.text or ""
+    args = parse_range_args(text.split()[1:])
+    ok = await apply_range_update(store.current_filter, chat_id, "rooms", args, int)
+    await _after_update(message, ok, store, notifier)
 
-        for row in stats.price_rows:
-            lines.append(
-                f"  {row.source_slug} · {row.rooms or '?'} {room_label} → "
-                f"Ø {row.avg_price:.0f} € "
-                f"(min {row.min_price:.0f} / max {row.max_price:.0f})"
-            )
-        await self._reply("\n".join(lines))
 
-    async def _change_lang(self, args: list[str]) -> None:
-        if not args or args[0].lower() not in {"en", "ru"}:
-            await self._reply(t("lang_invalid"))
-            return
-        new_lang = args[0].lower()
-        settings.__dict__["BOT_LANGUAGE"] = new_lang
-        logger.info("UI language changed to: %s", new_lang)
-        await self._reply(t("lang_changed", lang=new_lang))
+@router.message(Command("price"))
+async def cmd_price(
+    message: Message,
+    registry: UserRegistry,
+    notifier: TelegramNotifier,
+) -> None:
+    chat_id = str(message.chat.id)
+    store = await registry.get_or_create(chat_id)
+    text = message.text or ""
+    args = parse_range_args(text.split()[1:])
+    ok = await apply_range_update(store.current_filter, chat_id, "price", args, float)
+    await _after_update(message, ok, store, notifier)
 
-    async def _reply(self, text: str) -> None:
-        try:
-            async with self.session.post(
-                f"{TELEGRAM_API}/sendMessage",
-                json    = {
-                    "chat_id":    settings.TELEGRAM_CHAT_ID,
-                    "text":       text,
-                    "parse_mode": "HTML",
-                },
-                timeout = aiohttp.ClientTimeout(total=settings.REQUEST_TIMEOUT),
-            ) as resp:
-                await resp.json()
-        except Exception as exc:
-            logger.warning("Failed to send Telegram reply: %s", exc)
+
+@router.message(Command("area"))
+async def cmd_area(
+    message: Message,
+    registry: UserRegistry,
+    notifier: TelegramNotifier,
+) -> None:
+    chat_id = str(message.chat.id)
+    store = await registry.get_or_create(chat_id)
+    text = message.text or ""
+    args = parse_range_args(text.split()[1:])
+    ok = await apply_range_update(store.current_filter, chat_id, "area", args, float)
+    await _after_update(message, ok, store, notifier)
+
+
+@router.message(Command("status"))
+async def cmd_status(
+    message: Message,
+    registry: UserRegistry,
+    notifier: TelegramNotifier,
+) -> None:
+    chat_id = str(message.chat.id)
+    store = await registry.get_or_create(chat_id)
+    text = message.text or ""
+    parts = text.split()
+    raw = parts[1].lower() if len(parts) > 1 else ""
+    try:
+        status = SocialStatus(raw)
+    except ValueError:
+        await message.answer(translate("status_options"))
+        return
+    ok = await apply_status_update(store.current_filter, chat_id, status)
+    await _after_update(message, ok, store, notifier)
+
+
+@router.message(Command("pause"))
+async def cmd_pause(message: Message, registry: UserRegistry) -> None:
+    store = await registry.get_or_create(str(message.chat.id))
+    store.set_paused(True)
+    await message.answer(translate("paused"))
+
+
+@router.message(Command("resume"))
+async def cmd_resume(
+    message: Message,
+    registry: UserRegistry,
+    notifier: TelegramNotifier,
+) -> None:
+    chat_id = str(message.chat.id)
+    store = await registry.get_or_create(chat_id)
+
+    if store.is_paused:
+        store.set_paused(False)
+        await message.answer(translate("resumed"))
+        await message.answer(translate("preview_searching"))
+        _start_preview(chat_id, store, notifier)
+    else:
+        await message.answer(translate("resumed"))
+
+
+@router.message(Command("reset"))
+async def cmd_reset(
+    message: Message,
+    registry: UserRegistry,
+    notifier: TelegramNotifier,
+) -> None:
+    chat_id = str(message.chat.id)
+    store = await registry.get_or_create(chat_id)
+    store.reset_to_defaults()
+    cleared = seen.clear_processed()
+    logger.info(
+        "[%s] Filters reset. Cleared %d IDs for re-evaluation", chat_id, cleared
+    )
+
+    summary = store.current_filter.summary(settings.BOT_LANGUAGE)
+    await message.answer(f"{translate('reset_done')}\n\n{summary}")
+
+    if not store.is_paused:
+        await message.answer(translate("preview_searching"))
+        _start_preview(chat_id, store, notifier)
+
+
+@router.message(Command("lang"))
+async def cmd_lang(message: Message) -> None:
+    text = message.text or ""
+    parts = text.split()
+    if len(parts) < 2 or parts[1].lower() not in {"en", "ru"}:
+        await message.answer(translate("lang_invalid"))
+        return
+    settings.BOT_LANGUAGE = parts[1].lower()
+    await message.answer(translate("lang_changed"))
+
+
+@router.message()
+async def cmd_unknown(message: Message) -> None:
+    if message.text and message.text.startswith("/"):
+        await message.answer(translate("unknown_cmd"))

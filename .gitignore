@@ -9,5 +9,5 @@ __pytest_cache__
 .ruff_cache
 .env
 ruff.toml
-localhost-key.pem
-localhost.pem
+.env.example
+.mypy_cache
