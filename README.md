@@ -61,25 +61,27 @@ Convenient shortcuts for container and database management:
 | `make make-migration m="text"` | Create a new migration (autogenerate) |
 ---
 
-## 🤖 Telegram Bot Commands
+## 🤖 Telegram Bot Interface
 
-| Command | Description |
+The bot uses an inline button menu instead of text commands.
+
+| Button | Description |
 | --- | --- |
-| `/start` | Register and view help information |
-| `/filter` | Show current search settings |
-| `/price 600-1500` | Set price range |
-| `/rooms 2-3` | Set number of rooms |
-| `/area 50-100` | Set area range in **m²** |
-| `/status any` | Set social status (wbs / no_wbs / any) |
-| `/pause` / `/resume` | Enable or disable notifications |
-| `/reset` | Reset filters to default values |
-| `/lang en` | Switch interface language (en/ru) |
+| `/start` or `/menu` | Open the filter menu |
+| 🚪 Rooms | Select room range from presets |
+| 💰 Price | Select price range from presets |
+| 📐 Area | Select area range from presets |
+| 📋 Status | Select social status (any / wbs / market) |
+| 👁 Show filter | Display current filter settings |
+| 🔄 Reset | Reset all filters |
+| ⏸ Pause / ▶️ Resume | Pause or resume notifications |
+| 🌐 EN / 🌐 RU | Switch interface language |
 
 ---
 
 ## 🛠 Tech Stack
 
-* **Language:** Python 3.12+ (Asyncio)
+* **Language:** Python 3.14+ (Asyncio)
 * **Bot Framework:** aiogram 3.x
 * **Database:** PostgreSQL
 * **Migrations:** Alembic

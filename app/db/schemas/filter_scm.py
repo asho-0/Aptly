@@ -29,11 +29,13 @@ class SaveFilterRequest(BaseModel):
     max_price: Optional[float] = None
     social_status: SocialStatus
     paused: bool = False
+    lang: str = "en"
 
 
 class SetPausedRequest(BaseModel):
     chat_id: str
     paused: bool
+    lang: str = "en"
 
 
 class UpdateFilterFieldRequest(BaseModel):

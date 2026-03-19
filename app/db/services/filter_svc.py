@@ -1,7 +1,6 @@
 import logging
 from typing import Optional, Tuple
 
-from app.config import settings
 from app.core.apartment import ApartmentFilter
 from app.core.enums import SocialStatus
 from app.db.repositories.filter_repo import FilterRepository
@@ -13,23 +12,28 @@ from app.db.schemas.filter_scm import (
 
 logger = logging.getLogger(__name__)
 
+
 class FilterService:
     def __init__(self):
         self.repo = FilterRepository()
 
     def build_default_filter(self) -> ApartmentFilter:
         return ApartmentFilter(
-            min_rooms=settings.FILTER_MIN_ROOMS,
-            max_rooms=settings.FILTER_MAX_ROOMS,
-            min_sqm=settings.FILTER_MIN_SQM,
-            max_sqm=settings.FILTER_MAX_SQM,
-            min_price=settings.FILTER_MIN_PRICE,
-            max_price=settings.FILTER_MAX_PRICE,
-            social_status=SocialStatus(settings.FILTER_SOCIAL_STATUS),
+            min_rooms=None,
+            max_rooms=None,
+            min_sqm=None,
+            max_sqm=None,
+            min_price=None,
+            max_price=None,
+            social_status=SocialStatus.ANY,
         )
 
-    async def load_filter(self, chat_id: str) -> Optional[Tuple[ApartmentFilter, bool]]:
-        response: Optional[FilterResponse] = await self.repo.load(LoadFilterRequest(chat_id=chat_id))
+    async def load_filter(
+        self, chat_id: str
+    ) -> Optional[Tuple[ApartmentFilter, bool, str]]:
+        response: Optional[FilterResponse] = await self.repo.load(
+            LoadFilterRequest(chat_id=chat_id)
+        )
 
         if response is None:
             logger.info("No saved filter for chat_id=%s — using defaults", chat_id)
@@ -44,9 +48,16 @@ class FilterService:
             max_price=response.max_price,
             social_status=SocialStatus(response.social_status),
         )
-        return filt, response.paused
+        lang = getattr(response, "lang", None) or "en"
+        return filt, response.paused, lang
 
-    async def save_filter(self, chat_id: str, filt: ApartmentFilter, paused: bool) -> None:
+    async def save_filter(
+        self,
+        chat_id: str,
+        filt: ApartmentFilter,
+        paused: bool,
+        lang: str = "en",
+    ) -> None:
         req = SaveFilterRequest(
             chat_id=chat_id,
             min_rooms=filt.min_rooms,
@@ -57,9 +68,12 @@ class FilterService:
             max_price=filt.max_price,
             social_status=filt.social_status,
             paused=paused,
+            lang=lang,
         )
         await self.repo.save(req)
-        logger.debug("Filter persisted for chat_id=%s paused=%s", chat_id, paused)
+        logger.debug(
+            "Filter persisted for chat_id=%s paused=%s lang=%s", chat_id, paused, lang
+        )
 
     async def apply_range_update(
         self,
@@ -68,6 +82,7 @@ class FilterService:
         field: str,
         args: list[str],
         cast_type: type,
+        lang: str = "en",
     ) -> bool:
         field_map = {
             "rooms": ("min_rooms", "max_rooms"),
@@ -90,7 +105,7 @@ class FilterService:
         except (ValueError, IndexError):
             return False
 
-        await self.save_filter(chat_id, filt, paused=False)
+        await self.save_filter(chat_id, filt, paused=False, lang=lang)
         return True
 
     async def apply_status_update(
@@ -98,7 +113,8 @@ class FilterService:
         filt: ApartmentFilter,
         chat_id: str,
         value: SocialStatus,
+        lang: str = "en",
     ) -> bool:
         filt.social_status = value
-        await self.save_filter(chat_id, filt, paused=False)
+        await self.save_filter(chat_id, filt, paused=False, lang=lang)
         return True

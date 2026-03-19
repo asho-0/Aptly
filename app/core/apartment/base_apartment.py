@@ -17,6 +17,18 @@ class ApartmentFilterBase(ABC):
     @abstractmethod
     def summary(self, lang: str = "en") -> str: ...
 
+    def is_complete(self) -> bool:
+        return all(
+            [
+                self.min_rooms is not None,
+                self.max_rooms is not None,
+                self.min_sqm is not None,
+                self.max_sqm is not None,
+                self.min_price is not None,
+                self.max_price is not None,
+            ]
+        )
+
 
 @dataclass
 class ApartmentBase(ABC):

@@ -56,69 +56,49 @@ APARTMENT_LABELS: dict[str, dict[str, str]] = {
 
 TRANSLATIONS: dict[str, dict[str, str]] = {
     "en": {
+        "menu_title": "⚙️ Use the buttons below to configure your filter:",
+        "choose_rooms": "🚪 Select room range:",
+        "choose_price": "💰 Select price range:",
+        "choose_area": "📐 Select area range:",
+        "choose_status": "📋 Select social status:",
         "filter_updated": "✅ Filter updated!",
+        "filter_incomplete": "⚠️ Please set all filter fields before searching.",
         "preview_searching": "🔍 Searching current listings with your new filter…",
         "preview_none": "📭 No matching listings found right now. You'll be notified when new ones appear.",
-        "paused": "⏸ Notifications paused. Send /resume to continue.",
+        "paused": "⏸ Notifications paused.",
         "resumed": "▶️ Notifications resumed!",
         "reset_done": "🔄 Filters reset to defaults.",
-        "unknown_cmd": "❓ Unknown command. Send /help for the list.",
-        "invalid_value": "⚠️ Invalid value. Use numbers, e.g.:\n/price 500 1500\n/area 30 80\n/rooms 2",
+        "invalid_value": "⚠️ Invalid value.",
         "status_options": "Valid options: any | market | wbs",
         "lang_changed": "🌐 Language set to English.",
         "lang_invalid": "⚠️ Supported languages: en, ru",
-        "reseen_done": "🔄 Cleared {count} seen UIDs. Re-sending preview…",
-        "help": (
-            "🤖 Available commands:\n\n"
-            "/filter – show active filters\n"
-            "/rooms 1 3 – set room range (min max)\n"
-            "/price 500 1500 – set rent range in € (min max)\n"
-            "/area 40 100 – set area range in m²\n"
-            "/status wbs – set social status filter (any | wbs | market)\n"
-            "/pause – pause notifications\n"
-            "/resume – resume notifications\n"
-            "/reseen – clear seen cache and re-send preview\n"
-            "/lang en – switch language (en / ru)\n"
-            "/reset – reset all filters to defaults\n"
-            "/help – this message"
-        ),
         "startup": (
             "🤖 Apartment Notifier started!\n\n"
             "Monitoring {count} German real-estate sources.\n"
-            "Send /help to see available commands."
+            "Send /help to open the menu."
         ),
     },
     "ru": {
+        "menu_title": "⚙️ Используйте кнопки ниже для настройки фильтра:",
+        "choose_rooms": "🚪 Выберите количество комнат:",
+        "choose_price": "💰 Выберите диапазон цены:",
+        "choose_area": "📐 Выберите диапазон площади:",
+        "choose_status": "📋 Выберите тип жилья:",
         "filter_updated": "✅ Фильтр обновлён!",
+        "filter_incomplete": "⚠️ Пожалуйста, заполните все поля фильтра перед поиском.",
         "preview_searching": "🔍 Ищу текущие объявления с новым фильтром…",
         "preview_none": "📭 Подходящих объявлений пока нет. Вы получите уведомление, когда появятся новые.",
-        "paused": "⏸ Уведомления приостановлены. Отправьте /resume для продолжения.",
+        "paused": "⏸ Уведомления приостановлены.",
         "resumed": "▶️ Уведомления возобновлены!",
-        "reset_done": "🔄 Фильтры сброшены до стандартных значений.",
-        "unknown_cmd": "❓ Неизвестная команда. Отправьте /help для списка.",
-        "invalid_value": "⚠️ Неверное значение. Используйте числа, например:\n/price 500 1500\n/area 30 80\n/rooms 2",
+        "reset_done": "🔄 Фильтры сброшены.",
+        "invalid_value": "⚠️ Неверное значение.",
         "status_options": "Допустимые значения: any | market | wbs",
         "lang_changed": "🌐 Язык установлен: Русский.",
         "lang_invalid": "⚠️ Поддерживаемые языки: en, ru",
-        "reseen_done": "🔄 Очищено {count} просмотренных UID. Отправляю превью…",
-        "help": (
-            "🤖 Доступные команды:\n\n"
-            "/filter – показать активные фильтры\n"
-            "/rooms 1 3 – количество комнат\n"
-            "/price 500 1500 – аренда в €/мес\n"
-            "/area 40 100 – площадь в м²\n"
-            "/status wbs – фильтр по типу жилья (any | wbs | market)\n"
-            "/pause – приостановить уведомления\n"
-            "/resume – возобновить уведомления\n"
-            "/reseen – сбросить кэш и повторить поиск\n"
-            "/lang ru – сменить язык\n"
-            "/reset – сбросить фильтры\n"
-            "/help – эта справка"
-        ),
         "startup": (
             "🤖 Бот по поиску квартир запущен!\n\n"
             "Отслеживаю {count} немецких сайтов недвижимости.\n"
-            "Отправьте /help для списка команд."
+            "Отправьте /help для открытия меню."
         ),
     },
 }

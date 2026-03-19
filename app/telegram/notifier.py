@@ -15,8 +15,10 @@ class TelegramNotifier:
     def __init__(self, bot: Bot) -> None:
         self._bot = bot
 
-    async def send_apartment(self, chat_id: int, apartment: Apartment) -> bool:
-        text = apartment.to_telegram_message()
+    async def send_apartment(
+        self, chat_id: int, apartment: Apartment, lang: str = "en"
+    ) -> bool:
+        text = apartment.to_telegram_message(lang=lang)
         if apartment.image_url:
             try:
                 await self._bot.send_photo(

@@ -44,11 +44,16 @@ class BaseScraper(ABC):
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
-    
+
     async def __aenter__(self):
         return self
 
-    async def __aexit__(self, exc_type: t.Optional[t.Type[BaseException]], exc_val: t.Optional[BaseException], exc_tb: t.Optional[TracebackType]) -> None:
+    async def __aexit__(
+        self,
+        exc_type: t.Optional[t.Type[BaseException]],
+        exc_val: t.Optional[BaseException],
+        exc_tb: t.Optional[TracebackType],
+    ) -> None:
         await self.close_session()
 
     def make_id(self, uid: str) -> str:
@@ -70,10 +75,14 @@ class BaseScraper(ABC):
             ) as resp:
                 if resp.status == 200:
                     return await resp.text()
-                
-                logger.warning("[%s] %s HTTP %d for %s", self.slug, method, resp.status, url)
+
+                logger.warning(
+                    "[%s] %s HTTP %d for %s", self.slug, method, resp.status, url
+                )
         except Exception as exc:
-            logger.warning("[%s] %s error %s: %s (att %d)", self.slug, method, url, exc, attempt)
+            logger.warning(
+                "[%s] %s error %s: %s (att %d)", self.slug, method, url, exc, attempt
+            )
 
         if attempt < settings.MAX_RETRIES:
             await asyncio.sleep(2**attempt)
@@ -117,4 +126,3 @@ class BaseScraper(ABC):
     @abstractmethod
     async def fetch_all(self) -> list[Apartment]:
         pass
-

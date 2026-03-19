@@ -7,6 +7,7 @@ from app.labels import FILTER_LABELS, APARTMENT_LABELS
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class ApartmentFilter(ApartmentFilterBase):
     def summary(self, lang: str = "en") -> str:
@@ -37,32 +38,55 @@ class Apartment(ApartmentBase):
     extra_costs: float | None = None
 
     def matches(self, apartment_filter: ApartmentFilterBase) -> bool:
-        logger.info(f"Matching {self.id}: P:{self.price} R:{self.rooms} S:{self.sqm} against filter")
+        if not apartment_filter.is_complete():
+            return False
 
         if self.price is None:
             return False
-            
-        min_p = apartment_filter.min_price if apartment_filter.min_price is not None else 0
-        max_p = apartment_filter.max_price if apartment_filter.max_price is not None else 999999
-        
+
+        min_p = (
+            apartment_filter.min_price if apartment_filter.min_price is not None else 0
+        )
+        max_p = (
+            apartment_filter.max_price
+            if apartment_filter.max_price is not None
+            else 999999
+        )
+
         if not (min_p <= self.price <= max_p):
             return False
 
         if self.rooms is not None:
-            min_r = apartment_filter.min_rooms if apartment_filter.min_rooms is not None else 0
-            max_r = apartment_filter.max_rooms if apartment_filter.max_rooms is not None else 99
+            min_r = (
+                apartment_filter.min_rooms
+                if apartment_filter.min_rooms is not None
+                else 0
+            )
+            max_r = (
+                apartment_filter.max_rooms
+                if apartment_filter.max_rooms is not None
+                else 99
+            )
             if not (min_r <= self.rooms <= max_r):
                 return False
 
         if self.sqm is not None:
-            min_s = apartment_filter.min_sqm if apartment_filter.min_sqm is not None else 0
-            max_s = apartment_filter.max_sqm if apartment_filter.max_sqm is not None else 999
+            min_s = (
+                apartment_filter.min_sqm if apartment_filter.min_sqm is not None else 0
+            )
+            max_s = (
+                apartment_filter.max_sqm
+                if apartment_filter.max_sqm is not None
+                else 999
+            )
             if not (min_s <= self.sqm <= max_s):
                 return False
-        
+
         title_lower = self.title.lower()
-        is_wbs_in_title = any(word in title_lower for word in ["wbs", "berechtigungsschein", "stypendium"])
-        is_actually_wbs = (self.social_status == SocialStatus.WBS or is_wbs_in_title)
+        is_wbs_in_title = any(
+            word in title_lower for word in ["wbs", "berechtigungsschein", "stypendium"]
+        )
+        is_actually_wbs = self.social_status == SocialStatus.WBS or is_wbs_in_title
 
         if apartment_filter.social_status == SocialStatus.MARKET and is_actually_wbs:
             return False
@@ -72,10 +96,8 @@ class Apartment(ApartmentBase):
 
         return True
 
-    def to_telegram_message(self) -> str:
-        from app.config import settings
-
-        lb = APARTMENT_LABELS.get(settings.BOT_LANGUAGE, APARTMENT_LABELS["en"])
+    def to_telegram_message(self, lang: str = "en") -> str:
+        lb = APARTMENT_LABELS.get(lang, APARTMENT_LABELS["en"])
 
         def fmt_price(v: float) -> str:
             return f"{v:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")

@@ -4,6 +4,7 @@ import time
 import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand
 
 from app.telegram.handlers import UserRegistry
 from app.telegram.handlers.commands_handler import setup_router
@@ -13,15 +14,18 @@ from app.db.repositories.listing_repo import ListingRepository
 from app.db.session import db
 from app.parsers.site import ALL_SCRAPERS
 from app.telegram.notifier import TelegramNotifier
-from app.logging.structured_logger import setup_daily_logging
 from app.db.services import ListingService
+from app.core.apartment import Apartment
+from app.parsers.base.base import BaseScraper
 
 logger = logging.getLogger(__name__)
+
 
 class ScraperEngine:
     def __init__(self, notifier: TelegramNotifier, registry: UserRegistry):
         self.notifier = notifier
         self.registry = registry
+        self._known_site_ids: set[str] = set()
 
     async def run_cycle(self) -> int:
         active_users = await self.registry.fetch_all_active()
@@ -36,38 +40,64 @@ class ScraperEngine:
 
         scrapers = [cls() for cls in ALL_SCRAPERS]
         tasks = [asyncio.create_task(s.fetch_all()) for s in scrapers]
-        scrapers_with_tasks = list(zip(scrapers, tasks))
-        
-        total_notified = 0
-        for scraper, task in scrapers_with_tasks:
+
+        all_results: list[tuple[BaseScraper, list[Apartment]]] = []
+        current_site_ids: set[str] = set()
+
+        for scraper, task in zip(scrapers, tasks):
             try:
                 apartments = await task
                 if not apartments:
                     continue
-
-                async with db.session_context():
-                    svc = ListingService()
-                    for apt in apartments:
-                        for chat_id, store in active_users:
-                            if store.is_paused or apt.id in user_histories[chat_id]:
-                                continue
-                            if not apt.matches(store.current_filter):
-                                continue
-                            
-                            outcome = await svc.process_apartment(
-                                apt, store.current_filter, chat_id, self.notifier
-                            )
-
-                            if outcome.notified:
-                                user_histories[chat_id].add(apt.id)
-                                total_notified += 1
-                                await asyncio.sleep(0.3)
-
-                logger.info("[%s] cycle done: processed %d apartments", scraper.slug, len(apartments))
+                all_results.append((scraper, apartments))
+                for apt in apartments:
+                    current_site_ids.add(apt.id)
             except Exception as exc:
-                logger.error("[%s] fatal error: %s", scraper.slug, exc)
+                logger.error("[%s] fetch error: %s", scraper.slug, exc)
             finally:
                 await scraper.close_session()
+
+        new_on_site = current_site_ids - self._known_site_ids
+        self._known_site_ids = current_site_ids
+
+        if not new_on_site:
+            logger.info("No new listings on sites, skipping notification cycle")
+            return 0
+
+        logger.info(
+            "Found %d new listing(s) on sites, running notification cycle",
+            len(new_on_site),
+        )
+
+        total_notified = 0
+        async with db.session_context():
+            svc = ListingService()
+            for scraper, apartments in all_results:
+                for apt in apartments:
+                    for chat_id, store in active_users:
+                        if store.is_paused or apt.id in user_histories[chat_id]:
+                            continue
+                        if not apt.matches(store.current_filter):
+                            continue
+
+                        outcome = await svc.process_apartment(
+                            apt,
+                            store.current_filter,
+                            chat_id,
+                            self.notifier,
+                            lang=store.lang,
+                        )
+
+                        if outcome.notified:
+                            user_histories[chat_id].add(apt.id)
+                            total_notified += 1
+                            await asyncio.sleep(settings.NOTIFICATION_DELAY)
+
+                logger.info(
+                    "[%s] cycle done: processed %d apartments",
+                    scraper.slug,
+                    len(apartments),
+                )
 
         return total_notified
 
@@ -80,7 +110,12 @@ class ScraperEngine:
             try:
                 new_count = await self.run_cycle()
                 duration = time.perf_counter() - t0
-                logger.info("── Cycle #%d end: %d notified in %.1fs ──", cycle, new_count, duration)
+                logger.info(
+                    "── Cycle #%d end: %d notified in %.1fs ──",
+                    cycle,
+                    new_count,
+                    duration,
+                )
             except Exception as exc:
                 logger.exception("Cycle #%d failed: %s", cycle, exc)
 
@@ -97,10 +132,16 @@ class Application:
 
     async def run(self) -> None:
         settings.setup_logging()
-        # setup_daily_logging()
         logger.info("Starting up multi-user scraper...")
-        
+
         await db.init()
+
+        await self.bot.set_my_commands(
+            [
+                BotCommand(command="start", description="Open menu"),
+                BotCommand(command="menu", description="Open menu"),
+            ]
+        )
 
         main_router = setup_router(self.registry, self.notifier)
         self.dp.include_router(main_router)
@@ -109,7 +150,7 @@ class Application:
         try:
             await self.dp.start_polling(
                 self.bot,
-                allowed_updates=["message"],
+                allowed_updates=["message", "callback_query"],
                 registry=self.registry,
                 notifier=self.notifier,
             )

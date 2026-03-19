@@ -14,6 +14,7 @@ from app.db.schemas.listing_scm import (
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class ProcessResult:
     uid: str
@@ -21,6 +22,7 @@ class ProcessResult:
     is_new_in_db: bool
     passed_filter: bool
     notified: bool
+
 
 class ListingService:
     _locks: Dict[Tuple[str, str], asyncio.Lock] = {}
@@ -48,42 +50,48 @@ class ListingService:
         apartment_filter: ApartmentFilter,
         chat_id: str,
         notifier: TelegramNotifier,
+        lang: str = "en",
     ) -> ProcessResult:
         lock = await self._get_lock(apartment.id, chat_id)
-        
+
         if lock.locked():
             logger.info("Collision: user:%s waiting for apt:%s", chat_id, apartment.id)
 
         async with lock:
             if await self._is_already_notified(apartment.id, chat_id):
                 return ProcessResult(apartment.id, None, False, False, False)
-            
+
             upsert_resp: UpsertListingResponse = await self.repo.upsert(
                 self._build_upsert(apartment)
             )
 
             if not apartment.matches(apartment_filter):
                 return ProcessResult(
-                    apartment.id, upsert_resp.listing_db_id, upsert_resp.is_new, False, False
+                    apartment.id,
+                    upsert_resp.listing_db_id,
+                    upsert_resp.is_new,
+                    False,
+                    False,
                 )
-            
-            
-            sent = await notifier.send_apartment(int(chat_id), apartment)
+
+            sent = await notifier.send_apartment(int(chat_id), apartment, lang=lang)
             if sent:
                 await self._mark_as_seen(apartment.id, chat_id)
                 try:
                     await self.repo.mark_notified(
                         MarkNotifiedRequest(
-                            listing_db_id=upsert_resp.listing_db_id, 
+                            listing_db_id=upsert_resp.listing_db_id,
                             chat_id=chat_id,
-                            uid=apartment.id
+                            uid=apartment.id,
                         )
                     )
                 except Exception as e:
                     logger.debug("Failed to update listing notified flag: %s", e)
 
-                logger.info("Success: user:%s notified about apt:%s", chat_id, apartment.id)
-            
+                logger.info(
+                    "Success: user:%s notified about apt:%s", chat_id, apartment.id
+                )
+
             async with self._global_lock:
                 self._locks.pop((apartment.id, chat_id), None)
 
@@ -97,19 +105,21 @@ class ListingService:
         apartment_filter: ApartmentFilter,
         notifier: TelegramNotifier,
         chat_id: int,
+        lang: str = "en",
     ) -> bool:
         str_chat_id = str(chat_id)
-    
+
         if not apartment.matches(apartment_filter):
             return False
         if await self._is_already_notified(apartment.id, str_chat_id):
             return False
-            
-        sent = await notifier.send_apartment(chat_id, apartment)
+
+        await self.repo.upsert(self._build_upsert(apartment))
+
+        sent = await notifier.send_apartment(int(chat_id), apartment, lang=lang)
         if sent:
             await self._mark_as_seen(apartment.id, str_chat_id)
         return sent
-            
 
     def _build_upsert(self, apartment: Apartment) -> UpsertListingRequest:
         slug, external_id = apartment.id.split(":", 1)
