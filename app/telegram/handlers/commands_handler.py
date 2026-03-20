@@ -1,17 +1,17 @@
-import asyncio
-import logging
 import time
+import logging
 from typing import Any
 
+import asyncio
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
-from app.config import settings
+from app.core.config import settings
 from app.core.enums import SocialStatus
 from app.db.services import ListingService, FilterService
 from app.db.session import db
-from app.labels import TRANSLATIONS
+from app.telegram.interface.labels import TRANSLATIONS
 from app.telegram.notifier import TelegramNotifier
 from app.telegram.handlers import FilterStore, UserRegistry
 from app.telegram.interface.keyboards import (
@@ -154,8 +154,6 @@ class CallbackHandlers:
             await msg.answer(self.ctrl.translate("preview_searching", lang=lang))
             self.ctrl.start_preview(chat_id, store)
 
-    # ── /start, /menu ─────────────────────────────────────────
-
     async def show_menu(self, message: Message) -> None:
         store = await self._get_store(str(message.chat.id))
         lang = store.lang
@@ -170,8 +168,6 @@ class CallbackHandlers:
                 message_id=sent.message_id,
                 disable_notification=True,
             )
-
-    # ── navigation ────────────────────────────────────────────
 
     async def cb_back_menu(self, cb: CallbackQuery) -> None:
         msg = _require_message(cb)
@@ -220,8 +216,6 @@ class CallbackHandlers:
         )
         await cb.answer()
 
-    # ── presets ───────────────────────────────────────────────
-
     async def cb_rooms_preset(self, cb: CallbackQuery) -> None:
         msg = _require_message(cb)
         _, lo, hi = self._require_data(cb).split("_")
@@ -240,8 +234,6 @@ class CallbackHandlers:
         ok = await self._apply_range(str(msg.chat.id), "area", lo, hi, float)
         await self._finish_preset(cb, ok)
 
-    # ── status ────────────────────────────────────────────────
-
     async def cb_status_value(self, cb: CallbackQuery) -> None:
         msg = _require_message(cb)
         chat_id = str(msg.chat.id)
@@ -258,8 +250,6 @@ class CallbackHandlers:
             await cb.answer(
                 self.ctrl.translate("status_options", lang=store.lang), show_alert=True
             )
-
-    # ── misc ──────────────────────────────────────────────────
 
     async def cb_show_filter(self, cb: CallbackQuery) -> None:
         msg = _require_message(cb)

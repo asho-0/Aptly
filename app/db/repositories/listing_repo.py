@@ -1,12 +1,12 @@
 import typing as t
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select, update, func, cast as sa_cast, Numeric
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.sql import Select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import delete, select, update, func, cast as sa_cast, Numeric
 
-from app.db.models.models import Listing, NotifiedListing
 from app.db.repositories.base_repo import BaseRepository
+from app.db.models.models import Listing, NotifiedListing
 from app.db.schemas.listing_scm import (
     MarkNotifiedRequest,
     PriceStatsRow,

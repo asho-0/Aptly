@@ -4,26 +4,35 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-
 class StructuredJSONLogger:
-    def __init__(self, log_name: str, logs_directory: str = "logs") -> None:
+    def __init__(self, log_name: str, logs_directory: str = "app/logs") -> None:
         self.log_name = log_name
         self.logs_directory = Path(logs_directory)
         self.logs_directory.mkdir(exist_ok=True)
+        self._current_file: Optional[Path] = None
+        self._file_handle: Any = None
+
+    def _get_file_handle(self):
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        log_file = self.logs_directory / f"{today}_{self.log_name}.jsonl"
+        
+        if self._current_file != log_file:
+            if self._file_handle:
+                self._file_handle.close()
+            self._current_file = log_file
+            self._file_handle = open(log_file, "a", encoding="utf-8", buffering=1) # Line buffered
+        return self._file_handle
 
     def log(self, data: dict[str, Any]) -> None:
         if "timestamp" not in data:
             data["timestamp"] = datetime.now(timezone.utc).isoformat()
 
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        log_file = self.logs_directory / f"{today}_{self.log_name}.jsonl"
-
         try:
-            with open(log_file, "a", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False)
-                f.write("\n")
+            f = self._get_file_handle()
+            json.dump(data, f, ensure_ascii=False)
+            f.write("\n")
         except IOError as exc:
-            logging.error(f"Failed to write to {log_file}: {exc}")
+            logging.error(f"Failed to write to JSON log: {exc}")
 
     def log_notification_sent(
         self,
@@ -91,34 +100,28 @@ class StructuredJSONLogger:
 notification_logger = StructuredJSONLogger("notifications")
 scrape_logger = StructuredJSONLogger("scrape_runs")
 
-
 def setup_daily_logging(
-    log_name: str = "notifier",
-    logs_directory: str = "logs",
+    logs_directory: str = "app/logs",
     level: str = "INFO",
 ) -> logging.Logger:
-    import logging.handlers
-
     logs_path = Path(logs_directory)
     logs_path.mkdir(exist_ok=True)
 
-    logger = logging.getLogger(log_name)
+    logger = logging.getLogger() 
     logger.setLevel(level)
 
-    # Format
+    if logger.hasHandlers():
+        logger.handlers.clear()
+
     formatter = logging.Formatter(
         fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    log_file = logs_path / f"{log_name}.log"
-    file_handler = logging.handlers.RotatingFileHandler(
-        log_file,
-        mode="a",
-        maxBytes=50 * 1024 * 1024,  # 50 MB
-        backupCount=7,  # Keep 7 backups
-        encoding="utf-8",
-    )
+    timestamp = datetime.now().strftime("%d_%m_%Y")
+    log_file = logs_path / f"{timestamp}.log"
+
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 

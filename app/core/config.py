@@ -1,8 +1,6 @@
 import sys
-import logging
 from functools import lru_cache
 
-from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,7 +24,6 @@ class Settings(BaseSettings):
     CHECK_INTERVAL_SECONDS: int = 180
     NOTIFICATION_DELAY: float
     ENGINE_DEBUG: bool = False
-    LOG_LEVEL: str = "INFO"
     # ── Scraping ─────────────────────────────────────────────────
     REQUEST_TIMEOUT: int = 15
     REQUEST_DELAY: float = 2.0
@@ -43,14 +40,6 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("LOG_LEVEL")
-    @classmethod
-    def validate_log_level(cls, v: str) -> str:
-        allowed = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
-        upper = v.upper()
-        if upper not in allowed:
-            raise ValueError(f"LOG_LEVEL must be one of {allowed}")
-        return upper
 
     @property
     def DATABASE_URL_asyncpg(self) -> str:
@@ -86,14 +75,6 @@ class Settings(BaseSettings):
             "pool_recycle": 1800,
             "pool_pre_ping": True,
         }
-
-    def setup_logging(self) -> None:
-        logging.basicConfig(
-            level=self.LOG_LEVEL,
-            format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-            handlers=[logging.StreamHandler(sys.stdout)],
-        )
 
 
 @lru_cache(maxsize=1)

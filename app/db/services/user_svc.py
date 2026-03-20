@@ -1,7 +1,8 @@
-from typing import Optional
-from app.core.apartment import ApartmentFilter
+import typing as t
+
 from app.core.enums import SocialStatus
 from app.db.models.models import User, Filter
+from app.core.apartment import ApartmentFilter
 from app.db.repositories.user_repo import UserRepository
 
 
@@ -10,7 +11,7 @@ class UserService:
         self.repo = UserRepository()
 
     async def get_or_register_user(
-        self, chat_id: str, username: Optional[str], full_name: Optional[str]
+        self, chat_id: str, username: t.Optional[str], full_name: t.Optional[str]
     ) -> User:
         user = await self.repo.get_user_with_filter(chat_id)
         if not user:

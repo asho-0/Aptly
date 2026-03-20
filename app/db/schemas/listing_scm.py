@@ -1,4 +1,5 @@
-from typing import Optional
+import typing as t
+
 from pydantic import BaseModel, field_validator
 
 from app.core.enums import SocialStatus
@@ -11,35 +12,35 @@ class UpsertListingRequest(BaseModel):
     external_id: str
     title: str
     url: str
-    price: Optional[float] = None
+    price: t.Optional[float] = None
     currency: str = "EUR"
-    rooms: Optional[int] = None
-    sqm: Optional[float] = None
-    floor: Optional[str] = None
-    address: Optional[str] = None
-    district: Optional[str] = None
+    rooms: t.Optional[int] = None
+    sqm: t.Optional[float] = None
+    floor: t.Optional[str] = None
+    address: t.Optional[str] = None
+    district: t.Optional[str] = None
     social_status: SocialStatus
-    description: Optional[str] = None
-    image_url: Optional[str] = None
-    published_at: Optional[str] = None
+    description: t.Optional[str] = None
+    image_url: t.Optional[str] = None
+    published_at: t.Optional[str] = None
 
     @field_validator("price")
     @classmethod
-    def price_must_be_positive(cls, v: Optional[float]) -> Optional[float]:
+    def price_must_be_positive(cls, v: t.Optional[float]) -> t.Optional[float]:
         if v is not None and v < 0:
             raise ValueError("Price must be non-negative")
         return v
 
     @field_validator("rooms")
     @classmethod
-    def rooms_must_be_positive(cls, v: Optional[int]) -> Optional[int]:
+    def rooms_must_be_positive(cls, v: t.Optional[int]) -> t.Optional[int]:
         if v is not None and v <= 0:
             raise ValueError("Room count must be positive")
         return v
 
     @field_validator("sqm")
     @classmethod
-    def sqm_must_be_positive(cls, v: Optional[float]) -> Optional[float]:
+    def sqm_must_be_positive(cls, v: t.Optional[float]) -> t.Optional[float]:
         if v is not None and v <= 0:
             raise ValueError("Area must be positive")
         return v
@@ -70,7 +71,7 @@ class GetNotifiedUIDsRequest(BaseModel):
 
 
 class ListingStatsRequest(BaseModel):
-    source_slug: Optional[str] = None
+    source_slug: t.Optional[str] = None
     only_active: bool = True
     max_rows: int = 20
 
@@ -89,7 +90,7 @@ class UpsertListingResponse(BaseModel):
 
 class PriceStatsRow(BaseModel):
     source_slug: str
-    rooms: Optional[int]
+    rooms: t.Optional[int]
     total: int
     avg_price: float
     min_price: float

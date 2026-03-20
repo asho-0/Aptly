@@ -1,7 +1,7 @@
 import argparse
 from argparse import Namespace
 
-from app.config import settings
+from app.core.config import settings
 from app.db.utils import create_database, drop_database, run_migrations
 
 

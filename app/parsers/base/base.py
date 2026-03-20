@@ -8,7 +8,7 @@ import aiohttp
 from bs4 import BeautifulSoup, Tag
 from urllib.parse import urlparse, urljoin
 
-from app.config import settings
+from app.core.config import settings
 from app.core.apartment import Apartment
 
 logger = logging.getLogger(__name__)

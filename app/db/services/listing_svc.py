@@ -1,11 +1,10 @@
 import logging
+
 import asyncio
-from dataclasses import dataclass
-from typing import Dict, Tuple, Optional
 
 from app.telegram.notifier import TelegramNotifier
-from app.core.apartment import Apartment, ApartmentFilter
 from app.db.repositories.listing_repo import ListingRepository
+from app.core.apartment import Apartment, ApartmentFilter, ProcessResult
 from app.db.schemas.listing_scm import (
     MarkNotifiedRequest,
     UpsertListingRequest,
@@ -15,17 +14,8 @@ from app.db.schemas.listing_scm import (
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class ProcessResult:
-    uid: str
-    listing_db_id: Optional[int]
-    is_new_in_db: bool
-    passed_filter: bool
-    notified: bool
-
-
 class ListingService:
-    _locks: Dict[Tuple[str, str], asyncio.Lock] = {}
+    _locks: dict[tuple[str, str], asyncio.Lock] = {}
     _global_lock = asyncio.Lock()
 
     def __init__(self):
@@ -120,6 +110,9 @@ class ListingService:
         if sent:
             await self._mark_as_seen(apartment.id, str_chat_id)
         return sent
+
+    async def get_user_history(self, chat_id: str) -> set[str]:
+        return await self.repo.get_user_notified_uids(chat_id)
 
     def _build_upsert(self, apartment: Apartment) -> UpsertListingRequest:
         slug, external_id = apartment.id.split(":", 1)

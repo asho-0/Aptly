@@ -1,8 +1,8 @@
 import logging
-from typing import Optional, Tuple
+import typing as t
 
-from app.core.apartment import ApartmentFilter
 from app.core.enums import SocialStatus
+from app.core.apartment import ApartmentFilter
 from app.db.repositories.filter_repo import FilterRepository
 from app.db.schemas.filter_scm import (
     FilterResponse,
@@ -30,8 +30,8 @@ class FilterService:
 
     async def load_filter(
         self, chat_id: str
-    ) -> Optional[Tuple[ApartmentFilter, bool, str]]:
-        response: Optional[FilterResponse] = await self.repo.load(
+    ) -> t.Optional[tuple[ApartmentFilter, bool, str]]:
+        response: t.Optional[FilterResponse] = await self.repo.load(
             LoadFilterRequest(chat_id=chat_id)
         )
 

@@ -1,1 +1,1 @@
-from app.core.apartment.apartment import Apartment, ApartmentFilter
+from app.core.apartment.apartment import Apartment, ApartmentFilter, ProcessResult

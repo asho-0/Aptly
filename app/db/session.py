@@ -1,18 +1,21 @@
 import logging
+import typing as t
+
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from typing import AsyncGenerator, Optional
+
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from app.config import settings
+
+from app.core.config import settings
 from app.db.models.base import Base
 
 logger = logging.getLogger(__name__)
-_session_var: ContextVar[Optional[AsyncSession]] = ContextVar[AsyncSession | None](
+_session_var: ContextVar[t.Optional[AsyncSession]] = ContextVar[AsyncSession | None](
     "_session_var", default=None
 )
 
@@ -29,8 +32,8 @@ def get_session() -> AsyncSession:
 
 class DatabaseManager:
     def __init__(self) -> None:
-        self._engine: Optional[AsyncEngine] = None
-        self._factory: Optional[async_sessionmaker[AsyncSession]] = None
+        self._engine: t.Optional[AsyncEngine] = None
+        self._factory: t.Optional[async_sessionmaker[AsyncSession]] = None
 
     async def init(self) -> None:
         self._engine = create_async_engine(
@@ -60,7 +63,7 @@ class DatabaseManager:
             logger.info("Database engine disposed")
 
     @asynccontextmanager
-    async def session_context(self) -> AsyncGenerator[AsyncSession, None]:
+    async def session_context(self) -> t.AsyncGenerator[AsyncSession, None]:
         if self._factory is None:
             raise RuntimeError(
                 "DatabaseManager not initialised — call await db.init() first"
@@ -79,7 +82,7 @@ class DatabaseManager:
             _session_var.reset(token)
 
     @asynccontextmanager
-    async def nested_transaction(self) -> AsyncGenerator[AsyncSession, None]:
+    async def nested_transaction(self) -> t.AsyncGenerator[AsyncSession, None]:
         session = get_session()
         async with session.begin_nested():
             yield session

@@ -1,4 +1,4 @@
-from typing import Optional
+import typing as t
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -14,7 +14,7 @@ from app.db.schemas.filter_scm import (
 
 
 class FilterRepository(BaseRepository):
-    async def load(self, req: LoadFilterRequest) -> Optional[FilterResponse]:
+    async def load(self, req: LoadFilterRequest) -> t.Optional[FilterResponse]:
         row = (
             await self.session.execute(
                 select(Filter).where(Filter.chat_id == req.chat_id)

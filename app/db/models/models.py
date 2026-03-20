@@ -1,3 +1,6 @@
+import typing as t
+import datetime
+
 from sqlalchemy import (
     BigInteger,
     String,
@@ -11,21 +14,19 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from typing import Optional
-import datetime
 
 from app.db.models.base import Base
 
 
 class User(Base):
-    __tablename__ = "users"
+    __tablename__ = "user"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     chat_id: Mapped[str] = mapped_column(
         String(64), nullable=False, unique=True, index=True
     )
-    username: Mapped[Optional[str]] = mapped_column(String(128))
-    full_name: Mapped[Optional[str]] = mapped_column(String(255))
+    username: Mapped[t.Optional[str]] = mapped_column(String(128))
+    full_name: Mapped[t.Optional[str]] = mapped_column(String(255))
     language: Mapped[str] = mapped_column(String(10), server_default="en")
     is_active: Mapped[bool] = mapped_column(Boolean, server_default="true", index=True)
 
@@ -33,7 +34,7 @@ class User(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    filter: Mapped["Filter"] = relationship(
+    filters: Mapped["Filter"] = relationship(
         "Filter", back_populates="user", cascade="all, delete-orphan", uselist=False
     )
 
@@ -43,33 +44,33 @@ class User(Base):
 
 
 class Filter(Base):
-    __tablename__ = "filters"
+    __tablename__ = "filter"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     chat_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("users.chat_id", ondelete="CASCADE"), unique=True
+        String(64), ForeignKey("user.chat_id", ondelete="CASCADE"), unique=True
     )
     paused: Mapped[bool] = mapped_column(
         Boolean, server_default="false", nullable=False, index=True
     )
 
-    min_rooms: Mapped[Optional[int]] = mapped_column(SmallInteger)
-    max_rooms: Mapped[Optional[int]] = mapped_column(SmallInteger)
-    min_price: Mapped[Optional[float]] = mapped_column(Numeric(12, 2))
-    max_price: Mapped[Optional[float]] = mapped_column(Numeric(12, 2))
-    min_sqm: Mapped[Optional[float]] = mapped_column(Numeric(8, 2))
-    max_sqm: Mapped[Optional[float]] = mapped_column(Numeric(8, 2))
+    min_rooms: Mapped[t.Optional[int]] = mapped_column(SmallInteger)
+    max_rooms: Mapped[t.Optional[int]] = mapped_column(SmallInteger)
+    min_price: Mapped[t.Optional[float]] = mapped_column(Numeric(12, 2))
+    max_price: Mapped[t.Optional[float]] = mapped_column(Numeric(12, 2))
+    min_sqm: Mapped[t.Optional[float]] = mapped_column(Numeric(8, 2))
+    max_sqm: Mapped[t.Optional[float]] = mapped_column(Numeric(8, 2))
 
     social_status: Mapped[str] = mapped_column(String(32), server_default="any")
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    user: Mapped["User"] = relationship("User", back_populates="filter")
+    user: Mapped["User"] = relationship("User", back_populates="filters")
 
 
 class Listing(Base):
-    __tablename__ = "listings"
+    __tablename__ = "listing"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     uid: Mapped[str] = mapped_column(
@@ -81,27 +82,27 @@ class Listing(Base):
     source_name: Mapped[str] = mapped_column(String(100))
     title: Mapped[str] = mapped_column(Text)
     url: Mapped[str] = mapped_column(Text)
-    price: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), index=True)
+    price: Mapped[t.Optional[float]] = mapped_column(Numeric(12, 2), index=True)
     currency: Mapped[str] = mapped_column(String(10), server_default="EUR")
-    rooms: Mapped[Optional[int]] = mapped_column(SmallInteger, index=True)
-    sqm: Mapped[Optional[float]] = mapped_column(Numeric(8, 2))
-    floor: Mapped[Optional[int]] = mapped_column(SmallInteger)
-    address: Mapped[Optional[str]] = mapped_column(Text)
-    district: Mapped[Optional[str]] = mapped_column(String(128), index=True)
+    rooms: Mapped[t.Optional[int]] = mapped_column(SmallInteger, index=True)
+    sqm: Mapped[t.Optional[float]] = mapped_column(Numeric(8, 2))
+    floor: Mapped[t.Optional[int]] = mapped_column(SmallInteger)
+    address: Mapped[t.Optional[str]] = mapped_column(Text)
+    district: Mapped[t.Optional[str]] = mapped_column(String(128), index=True)
     social_status: Mapped[str] = mapped_column(
         String(32), server_default="any", index=True
     )
-    description: Mapped[Optional[str]] = mapped_column(Text)
-    image_url: Mapped[Optional[str]] = mapped_column(Text)
+    description: Mapped[t.Optional[str]] = mapped_column(Text)
+    image_url: Mapped[t.Optional[str]] = mapped_column(Text)
 
     active: Mapped[bool] = mapped_column(Boolean, server_default="true", index=True)
 
     notified: Mapped[bool] = mapped_column(Boolean, server_default="false", index=True)
-    notified_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+    notified_at: Mapped[t.Optional[datetime.datetime]] = mapped_column(
         DateTime(timezone=True)
     )
 
-    published_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+    published_at: Mapped[t.Optional[datetime.datetime]] = mapped_column(
         DateTime(timezone=True), index=True
     )
     first_seen_at: Mapped[datetime.datetime] = mapped_column(
@@ -122,15 +123,15 @@ class Listing(Base):
 
 
 class NotifiedListing(Base):
-    __tablename__ = "notified_listings"
+    __tablename__ = "notified_listing"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
 
     uid: Mapped[str] = mapped_column(
-        String(255), ForeignKey("listings.uid", ondelete="CASCADE"), index=True
+        String(255), ForeignKey("listing.uid", ondelete="CASCADE"), index=True
     )
     chat_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("users.chat_id", ondelete="CASCADE"), index=True
+        String(64), ForeignKey("user.chat_id", ondelete="CASCADE"), index=True
     )
     timestamp: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

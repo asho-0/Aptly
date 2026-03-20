@@ -1,8 +1,9 @@
-import asyncio
 import typing as t
 
-from app.core.apartment import ApartmentFilter
+import asyncio
+
 from app.db.session import db
+from app.core.apartment import ApartmentFilter
 from app.db.services import UserService, FilterService
 
 
@@ -73,23 +74,23 @@ class UserRegistry:
                 user_svc = UserService()
                 user = await user_svc.get_or_register_user(chat_id, username, full_name)
 
-                domain_filter = user_svc.convert_to_domain(user.filter)
-                lang = getattr(user.filter, "lang", None) or "en"
-                store = FilterStore(chat_id, domain_filter, user.filter.paused, lang)
+                domain_filter = user_svc.convert_to_domain(user.filters)
+                lang = getattr(user.filters, "lang", None) or "en"
+                store = FilterStore(chat_id, domain_filter, user.filters.paused, lang)
 
                 self._stores[chat_id] = store
                 return store
 
-    async def fetch_all_active(self) -> t.List[t.Tuple[str, FilterStore]]:
+    async def fetch_all_active(self) -> list[tuple[str, FilterStore]]:
         async with db.session_context():
             user_svc = UserService()
             users = await user_svc.repo.get_all_active_users()
 
             for user in users:
                 if user.chat_id not in self._stores:
-                    domain_filter = user_svc.convert_to_domain(user.filter)
-                    lang = getattr(user.filter, "lang", None) or "en"
+                    domain_filter = user_svc.convert_to_domain(user.filters)
+                    lang = getattr(user.filters, "lang", None) or "en"
                     self._stores[user.chat_id] = FilterStore(
-                        user.chat_id, domain_filter, user.filter.paused, lang
+                        user.chat_id, domain_filter, user.filters.paused, lang
                     )
         return list(self._stores.items())

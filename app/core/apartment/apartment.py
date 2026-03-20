@@ -1,11 +1,21 @@
 import logging
+import typing as t
 from dataclasses import dataclass
 
 from app.core.apartment.base_apartment import ApartmentBase, ApartmentFilterBase
 from app.core.enums import SocialStatus
-from app.labels import FILTER_LABELS, APARTMENT_LABELS
+from app.telegram.interface.labels import FILTER_LABELS, APARTMENT_LABELS
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ProcessResult:
+    uid: str
+    listing_db_id: t.Optional[int]
+    is_new_in_db: bool
+    passed_filter: bool
+    notified: bool
 
 
 @dataclass
