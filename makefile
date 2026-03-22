@@ -17,16 +17,16 @@ restart:
 	docker compose restart bot
 
 db-create:
-	python3 -m app.cli create
+	python3 -m app.db.cli create
 
 db-drop:
-	python3 -m app.cli drop
+	python3 -m app.db.cli drop
 
 db-recreate:
-	python3 -m app.cli recreate
+	python3 -m app.db.cli recreate
 
 db-migrate:
-	python3 -m app.cli migration
+	python3 -m app.db.cli migration
 
 make-migration:
 	alembic revision --autogenerate -m "$(m)"
