@@ -1,6 +1,6 @@
 # 🏠 Apartment Notifier Bot
 
-An asynchronous Python bot for real estate monitoring. It scrapes **3 websites** every minute, filters listings based on your specific criteria, and instantly sends new matches to Telegram.
+An asynchronous Python bot for real estate monitoring. It scrapes **4 websites** every 3 minutes, filters listings based on your specific criteria, and instantly sends new matches to Telegram.
 
 ---
 

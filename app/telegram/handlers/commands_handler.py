@@ -265,8 +265,10 @@ class CallbackHandlers:
         chat_id = str(msg.chat.id)
         store = await self._get_store(chat_id)
         store.reset_to_defaults()
+
         async with db.session_context():
             await self.ctrl.listing_svc.reset_user_history(chat_id)
+
         lang = store.lang
         await msg.edit_text(
             f"{self.ctrl.translate('reset_done', lang=lang)}\n\n{store.current_filter.summary(lang)}",
@@ -281,6 +283,7 @@ class CallbackHandlers:
         msg = _require_message(cb)
         store = await self._get_store(str(msg.chat.id))
         store.set_paused(True)
+
         await cb.answer(self.ctrl.translate("paused", lang=store.lang), show_alert=True)
 
     async def cb_resume(self, cb: CallbackQuery) -> None:
@@ -289,6 +292,7 @@ class CallbackHandlers:
         store = await self._get_store(chat_id)
         lang = store.lang
         store.set_paused(False)
+
         if not store.current_filter.is_complete():
             await cb.answer(
                 self.ctrl.translate("filter_incomplete", lang=lang), show_alert=True
@@ -302,8 +306,8 @@ class CallbackHandlers:
         msg = _require_message(cb)
         store = await self._get_store(str(msg.chat.id))
         store.set_lang(new_lang)
-        # Обновляем меню с новым языком сразу
         summary = store.current_filter.summary(new_lang)
+
         await msg.edit_text(
             f"{summary}\n\n{self.ctrl.translate('menu_title', lang=new_lang)}",
             reply_markup=main_menu_keyboard(),

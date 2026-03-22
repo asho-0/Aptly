@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 def _get_env_file() -> str:
     if any("pytest" in arg for arg in sys.argv):
         return ".env.test"
-    return ".env.example"
+    return ".env"
 
 
 class Settings(BaseSettings):
@@ -16,18 +16,18 @@ class Settings(BaseSettings):
     DB_USER: str
     DB_PASS: str
     DB_HOST: str
-    DB_PORT: int = 5432
+    DB_PORT: int
     DB_POSTGRES: str
     # ── Telegram ────────────────────────────────────────────────
     TELEGRAM_BOT_TOKEN: str
     # ── App ───────────────────────────────────────────────────────
-    CHECK_INTERVAL_SECONDS: int = 180
+    CHECK_INTERVAL_SECONDS: int
     NOTIFICATION_DELAY: float
     ENGINE_DEBUG: bool = False
     # ── Scraping ─────────────────────────────────────────────────
-    REQUEST_TIMEOUT: int = 15
-    REQUEST_DELAY: float = 2.0
-    MAX_RETRIES: int = 3
+    REQUEST_TIMEOUT: int
+    REQUEST_DELAY: float
+    MAX_RETRIES: int
     HEADERS: dict[str, str] = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -39,7 +39,6 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
-
 
     @property
     def DATABASE_URL_asyncpg(self) -> str:

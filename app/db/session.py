@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.db.models.base import Base
 
 logger = logging.getLogger(__name__)
+
 _session_var: ContextVar[t.Optional[AsyncSession]] = ContextVar[AsyncSession | None](
     "_session_var", default=None
 )

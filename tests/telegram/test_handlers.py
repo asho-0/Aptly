@@ -2,7 +2,7 @@ import pytest
 from app.telegram.handlers.handlers import FilterStore, UserRegistry
 from app.core.apartment import ApartmentFilter
 from app.core.enums import SocialStatus
-from app.tests.conftest import make_filter
+from tests.conftest import make_filter
 
 
 @pytest.fixture

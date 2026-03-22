@@ -8,7 +8,7 @@ from app.parsers.utils.de_parsing import (
     detect_social_housing_status,
 )
 from app.core.enums import SocialStatus
-from app.tests.parser.html_consts import (
+from tests.parser.html_consts import (
     DEGEWO_CARD_HTML,
     DEGEWO_MULTIPLE_HTML,
     DEGEWO_WBS_CARD_HTML,

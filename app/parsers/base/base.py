@@ -18,6 +18,7 @@ class BaseScraper(ABC):
     slug: str = ""
     name: str = ""
     base_url: str = ""
+
     MAX_PAGES = 5
 
     def __init__(self) -> None:

@@ -1,7 +1,7 @@
 import pytest
 from aiogram.exceptions import TelegramAPIError
 from app.telegram.notifier.notifier import TelegramNotifier
-from app.tests.conftest import make_apartment
+from tests.conftest import make_apartment
 
 
 @pytest.fixture

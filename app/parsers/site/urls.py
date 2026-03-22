@@ -6,5 +6,7 @@ STADT_UND_LAND_LISTINGS_URL = (
     "https://d2396ha8oiavw0.cloudfront.net/sul-main/immoSearch"
 )
 
-HOWOGE_LIST_URL = "https://www.howoge.de/?type=999&tx_howrealestate_json_list[action]=immoList"
+HOWOGE_LIST_URL = (
+    "https://www.howoge.de/?type=999&tx_howrealestate_json_list[action]=immoList"
+)
 HOWOGE_BASE_URL = "https://www.howoge.de"

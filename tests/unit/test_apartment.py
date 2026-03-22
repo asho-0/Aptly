@@ -1,17 +1,13 @@
 import pytest
 from app.core.enums import SocialStatus
-from app.tests.conftest import make_filter, make_apartment
+from tests.conftest import make_filter, make_apartment
 
 
 class TestApartmentMatches:
 
-    # ── incomplete filter ─────────────────────────────────────
-
     def test_incomplete_filter_always_returns_false(self, incomplete_filter):
         apt = make_apartment()
         assert apt.matches(incomplete_filter) is False
-
-    # ── price ─────────────────────────────────────────────────
 
     def test_price_within_range_passes(self):
         apt = make_apartment(price=600)
@@ -37,8 +33,6 @@ class TestApartmentMatches:
         apt = make_apartment(price=None)
         assert apt.matches(make_filter()) is False
 
-    # ── rooms ─────────────────────────────────────────────────
-
     def test_rooms_within_range_passes(self):
         apt = make_apartment(rooms=2)
         assert apt.matches(make_filter(min_rooms=1, max_rooms=3)) is True
@@ -55,8 +49,6 @@ class TestApartmentMatches:
         apt = make_apartment(rooms=None)
         assert apt.matches(make_filter()) is True
 
-    # ── area ──────────────────────────────────────────────────
-
     def test_sqm_within_range_passes(self):
         apt = make_apartment(sqm=50)
         assert apt.matches(make_filter(min_sqm=30, max_sqm=70)) is True
@@ -72,8 +64,6 @@ class TestApartmentMatches:
     def test_none_sqm_skips_sqm_check(self):
         apt = make_apartment(sqm=None)
         assert apt.matches(make_filter()) is True
-
-    # ── social status ─────────────────────────────────────────
 
     def test_any_filter_accepts_market_apt(self):
         apt = make_apartment(social_status=SocialStatus.MARKET)

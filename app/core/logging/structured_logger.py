@@ -4,8 +4,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+
 class StructuredJSONLogger:
-    def __init__(self, log_name: str, logs_directory: str = "app/logs") -> None:
+    def __init__(self, log_name: str, logs_directory: str = "logs") -> None:
         self.log_name = log_name
         self.logs_directory = Path(logs_directory)
         self.logs_directory.mkdir(exist_ok=True)
@@ -15,12 +16,14 @@ class StructuredJSONLogger:
     def _get_file_handle(self):
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         log_file = self.logs_directory / f"{today}_{self.log_name}.jsonl"
-        
+
         if self._current_file != log_file:
             if self._file_handle:
                 self._file_handle.close()
             self._current_file = log_file
-            self._file_handle = open(log_file, "a", encoding="utf-8", buffering=1) # Line buffered
+            self._file_handle = open(
+                log_file, "a", encoding="utf-8", buffering=1
+            )  # Line buffered
         return self._file_handle
 
     def log(self, data: dict[str, Any]) -> None:
@@ -100,14 +103,15 @@ class StructuredJSONLogger:
 notification_logger = StructuredJSONLogger("notifications")
 scrape_logger = StructuredJSONLogger("scrape_runs")
 
+
 def setup_daily_logging(
-    logs_directory: str = "app/logs",
+    logs_directory: str = "logs",
     level: str = "INFO",
 ) -> logging.Logger:
     logs_path = Path(logs_directory)
     logs_path.mkdir(exist_ok=True)
 
-    logger = logging.getLogger() 
+    logger = logging.getLogger()
     logger.setLevel(level)
 
     if logger.hasHandlers():

@@ -34,8 +34,8 @@ class UserService:
         self, chat_id: str, filt: ApartmentFilter, paused: bool
     ) -> None:
         user = await self.repo.get_user_with_filter(chat_id)
-        if user and user.filter:
-            f = user.filter
+        if user and user.filters:
+            f = user.filters
             f.paused = paused
             f.min_price = filt.min_price
             f.max_price = filt.max_price

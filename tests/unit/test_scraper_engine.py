@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from app.tests.conftest import make_filter, make_apartment
+from tests.conftest import make_filter, make_apartment
 
 
 def make_store(paused=False, lang="en", filter_kwargs=None):

@@ -1,6 +1,6 @@
 import pytest
 from app.db.services.listing_svc import ListingService
-from app.tests.conftest import make_filter, make_apartment
+from tests.conftest import make_filter, make_apartment
 
 
 @pytest.fixture

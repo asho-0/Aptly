@@ -3,7 +3,7 @@ import logging
 from sqlalchemy import text, create_engine
 from sqlalchemy.exc import ProgrammingError
 
-from app.config import settings
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
