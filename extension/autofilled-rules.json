@@ -1,0 +1,275 @@
+{
+  "domainRules": {
+    "degewo.de": [
+      {
+        "selector": "#salutation-dropdown > div",
+        "value": "",
+        "valueKey": "salutation",
+        "type": "click"
+      },
+      {
+        "selector": "#firstName",
+        "value": "",
+        "valueKey": "first_name"
+      },
+      {
+        "selector": "#lastName",
+        "value": "",
+        "valueKey": "last_name"
+      },
+      {
+        "selector": "#email",
+        "value": "",
+        "valueKey": "email"
+      },
+      {
+        "selector": "#formly_2_input_degewo_telefonnummer_0",
+        "value": "",
+        "valueKey": "phone"
+      },
+      {
+        "selector": "#formly_3_input_numberPersonsTotal_0",
+        "value": "",
+        "valueKey": "persons_total"
+      },
+      {
+        "selector": "#formly_7_select_degewo_fuer_wen_ist_wohnungsanfrage_0_select > div",
+        "value": "",
+        "valueKey": "self_usage",
+        "type": "click"
+      }
+    ],
+    "gewobag.de": [
+      {
+        "selector": "#content-tabs > div:nth-of-type(1) > button:nth-of-type(5)",
+        "value": "",
+        "type": "click"
+      },
+      {
+        "selector": "#salutation-dropdown > div",
+        "value": "",
+        "valueKey": "salutation",
+        "type": "click"
+      },
+      {
+        "selector": "#firstName",
+        "value": "",
+        "valueKey": "first_name"
+      },
+      {
+        "selector": "#lastName",
+        "value": "",
+        "valueKey": "last_name"
+      },
+      {
+        "selector": "#email",
+        "value": "",
+        "valueKey": "email"
+      },
+      {
+        "selector": "#phone-number",
+        "value": "",
+        "valueKey": "phone"
+      },
+      {
+        "selector": "#street",
+        "value": "",
+        "valueKey": "street"
+      },
+      {
+        "selector": "#house-number",
+        "value": "",
+        "valueKey": "house_number"
+      },
+      {
+        "selector": "#zip-code",
+        "value": "",
+        "valueKey": "zip_code"
+      },
+      {
+        "selector": "#city",
+        "value": "",
+        "valueKey": "city"
+      },
+      {
+        "selector": "#formly_2_input_gewobag_gesamtzahl_der_einziehenden_personen_erwachsene_und_kinder_0",
+        "value": "",
+        "valueKey": "persons_total"
+      },
+      {
+        "selector": "#formly_4_radio_\\$\\$_wbs_available_\\$\\$_0-Ja",
+        "value": "",
+        "valueKey": "wbs_available",
+        "type": "checkbox"
+      },
+      {
+        "selector": "#formly_6_input_\\$\\$_wbs_valid_until_\\$\\$_0",
+        "value": "",
+        "valueKey": "wbs_date"
+      },
+      {
+        "selector": "#formly_6_select_gewobag_art_bezeichnung_des_wbs_1_select > div",
+        "value": "",
+        "valueKey": "wbs_income",
+        "type": "click"
+      },
+      {
+        "selector": "#formly_7_select_\\$\\$_wbs_max_number_rooms_\\$\\$_0_select > div",
+        "value": "",
+        "valueKey": "wbs_rooms",
+        "type": "click"
+      },
+      {
+        "selector": "#formly_9_select_gewobag_fuer_wen_wird_die_wohnungsanfrage_gestellt_0_select > div",
+        "value": "",
+        "valueKey": "self_usage",
+        "type": "click"
+      },
+      {
+        "selector": "#formly_17_input_\\$\\$_telephone_number_\\$\\$_0",
+        "value": "",
+        "valueKey": "phone"
+      },
+      {
+        "selector": "#formly_20_checkbox_gewobag_datenschutzhinweis_bestaetigt_0",
+        "value": "",
+        "valueKey": "always_true",
+        "type": "checkbox"
+      }
+    ],
+    "howoge.de": [
+      {
+        "selector": "#immo-form-firstname",
+        "value": "",
+        "valueKey": "first_name"
+      },
+      {
+        "selector": "#immo-form-lastname",
+        "value": "",
+        "valueKey": "last_name"
+      },
+      {
+        "selector": "#immo-form-email",
+        "value": "",
+        "valueKey": "email"
+      }
+    ],
+    "stadtundland.de": [
+      {
+        "selector": "#name",
+        "value": "",
+        "valueKey": "first_name"
+      },
+      {
+        "selector": "#surname",
+        "value": "",
+        "valueKey": "last_name"
+      },
+      {
+        "selector": "#street",
+        "value": "",
+        "valueKey": "street"
+      },
+      {
+        "selector": "#houseNo",
+        "value": "",
+        "valueKey": "house_number"
+      },
+      {
+        "selector": "#postalCode",
+        "value": "",
+        "valueKey": "zip_code"
+      },
+      {
+        "selector": "#city",
+        "value": "",
+        "valueKey": "city"
+      },
+      {
+        "selector": "#phone",
+        "value": "",
+        "valueKey": "phone"
+      },
+      {
+        "selector": "#email",
+        "value": "",
+        "valueKey": "email"
+      },
+      {
+        "selector": "#privacy",
+        "value": "",
+        "valueKey": "always_true",
+        "type": "checkbox"
+      },
+      {
+        "selector": "#provision",
+        "value": "",
+        "valueKey": "always_true",
+        "type": "checkbox"
+      }
+    ],
+    "wbm.de": [
+      {
+        "selector": "#contact-box > a",
+        "value": "",
+        "type": "click"
+      },
+      {
+        "selector": "#powermail_field_wbszimmeranzahl",
+        "value": "",
+        "valueKey": "wbs_rooms"
+      },
+      {
+        "selector": "#powermail_field_einkommensgrenzenacheinkommensbescheinigung9",
+        "value": "",
+        "valueKey": "wbs_income"
+      },
+      {
+        "selector": "#powermail_field_anrede",
+        "value": "",
+        "valueKey": "salutation"
+      },
+      {
+        "selector": "#powermail_field_name",
+        "value": "",
+        "valueKey": "last_name"
+      },
+      {
+        "selector": "#powermail_field_vorname",
+        "value": "",
+        "valueKey": "first_name"
+      },
+      {
+        "selector": "#powermail_field_strasse",
+        "value": "",
+        "valueKey": "address_full"
+      },
+      {
+        "selector": "#powermail_field_plz",
+        "value": "",
+        "valueKey": "zip_code"
+      },
+      {
+        "selector": "#powermail_field_ort",
+        "value": "",
+        "valueKey": "city"
+      },
+      {
+        "selector": "#powermail_field_e_mail",
+        "value": "",
+        "valueKey": "email"
+      },
+      {
+        "selector": "#powermail_field_telefon",
+        "value": "",
+        "valueKey": "phone"
+      },
+      {
+        "selector": "#c722 > div > div > form > div:nth-of-type(2) > div:nth-of-type(18) > div > div > div:nth-of-type(1) > label",
+        "value": "",
+        "valueKey": "always_true",
+        "type": "checkbox"
+      }
+    ]
+  }
+}
