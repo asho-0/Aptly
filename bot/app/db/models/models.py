@@ -1,0 +1,200 @@
+import datetime
+import typing as t
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Numeric,
+    SmallInteger,
+    String,
+    Text,
+    func,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.models.base import Base
+
+
+class User(Base):
+    __tablename__ = "user"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    chat_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, index=True
+    )
+    username: Mapped[t.Optional[str]] = mapped_column(String(128))
+    full_name: Mapped[t.Optional[str]] = mapped_column(String(255))
+    first_name: Mapped[t.Optional[str]] = mapped_column(String(128))
+    last_name: Mapped[t.Optional[str]] = mapped_column(String(128))
+    salutation: Mapped[t.Optional[str]] = mapped_column(String(16))
+    email: Mapped[t.Optional[str]] = mapped_column(String(255))
+    phone: Mapped[t.Optional[str]] = mapped_column(String(64))
+    street: Mapped[t.Optional[str]] = mapped_column(String(255))
+    house_number: Mapped[t.Optional[str]] = mapped_column(String(64))
+    zip_code: Mapped[t.Optional[str]] = mapped_column(String(32))
+    city: Mapped[t.Optional[str]] = mapped_column(String(128))
+    persons_total: Mapped[t.Optional[int]] = mapped_column(SmallInteger)
+    wbs_available: Mapped[bool] = mapped_column(Boolean, server_default="false", nullable=False)
+    wbs_date: Mapped[t.Optional[datetime.date]] = mapped_column(Date)
+    wbs_rooms: Mapped[t.Optional[int]] = mapped_column(SmallInteger)
+    wbs_income: Mapped[t.Optional[int]] = mapped_column(SmallInteger)
+    pairing_pin: Mapped[t.Optional[str]] = mapped_column(String(6), index=True)
+    show_special_listings: Mapped[bool] = mapped_column(
+        Boolean, server_default="false", nullable=False
+    )
+    language: Mapped[str] = mapped_column(String(10), server_default="en")
+    is_active: Mapped[bool] = mapped_column(Boolean, server_default="true", index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    filters: Mapped["Filter"] = relationship(
+        "Filter",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    notifications: Mapped[list["NotifiedListing"]] = relationship(
+        "NotifiedListing",
+        back_populates="user",
+    )
+    pairings: Mapped[list["ExtensionPairing"]] = relationship(
+        "ExtensionPairing",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+
+class Filter(Base):
+    __tablename__ = "filter"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    chat_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("user.chat_id", ondelete="CASCADE"), unique=True
+    )
+    paused: Mapped[bool] = mapped_column(
+        Boolean, server_default="false", nullable=False, index=True
+    )
+    min_rooms: Mapped[t.Optional[int]] = mapped_column(SmallInteger)
+    max_rooms: Mapped[t.Optional[int]] = mapped_column(SmallInteger)
+    min_price: Mapped[t.Optional[float]] = mapped_column(Numeric(12, 2))
+    max_price: Mapped[t.Optional[float]] = mapped_column(Numeric(12, 2))
+    min_sqm: Mapped[t.Optional[float]] = mapped_column(Numeric(8, 2))
+    max_sqm: Mapped[t.Optional[float]] = mapped_column(Numeric(8, 2))
+    social_status: Mapped[str] = mapped_column(String(32), server_default="any")
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="filters")
+
+
+class Listing(Base):
+    __tablename__ = "listing"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    uid: Mapped[str] = mapped_column(
+        String(255), unique=True, nullable=False, index=True
+    )
+    source_slug: Mapped[str] = mapped_column(String(50), index=True)
+    external_id: Mapped[str] = mapped_column(String(100), index=True)
+    source_name: Mapped[str] = mapped_column(String(100))
+    title: Mapped[str] = mapped_column(Text)
+    url: Mapped[str] = mapped_column(Text)
+    price: Mapped[t.Optional[float]] = mapped_column(Numeric(12, 2), index=True)
+    cold_rent: Mapped[t.Optional[float]] = mapped_column(Numeric(12, 2))
+    extra_costs: Mapped[t.Optional[float]] = mapped_column(Numeric(12, 2))
+    currency: Mapped[str] = mapped_column(String(10), server_default="EUR")
+    rooms: Mapped[t.Optional[int]] = mapped_column(SmallInteger, index=True)
+    sqm: Mapped[t.Optional[float]] = mapped_column(Numeric(8, 2))
+    floor: Mapped[t.Optional[str]] = mapped_column(Text)
+    address: Mapped[t.Optional[str]] = mapped_column(Text)
+    district: Mapped[t.Optional[str]] = mapped_column(String(128), index=True)
+    social_status: Mapped[str] = mapped_column(
+        String(32), server_default="any", index=True
+    )
+    description: Mapped[t.Optional[str]] = mapped_column(Text)
+    image_url: Mapped[t.Optional[str]] = mapped_column(Text)
+    active: Mapped[bool] = mapped_column(Boolean, server_default="true", index=True)
+    notified: Mapped[bool] = mapped_column(Boolean, server_default="false", index=True)
+    notified_at: Mapped[t.Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
+    published_at: Mapped[t.Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    first_seen_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    notified_records: Mapped[list["NotifiedListing"]] = relationship(
+        "NotifiedListing",
+        back_populates="listing",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        Index("uq_listing_source_ext", "source_slug", "external_id", unique=True),
+        Index("ix_listing_stats", "source_slug", "rooms", "price", "active"),
+    )
+
+
+class NotifiedListing(Base):
+    __tablename__ = "notified_listing"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    uid: Mapped[str] = mapped_column(
+        String(255), ForeignKey("listing.uid", ondelete="CASCADE"), index=True
+    )
+    chat_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("user.chat_id", ondelete="CASCADE"), index=True
+    )
+    timestamp: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="notifications")
+    listing: Mapped["Listing"] = relationship(
+        "Listing", back_populates="notified_records"
+    )
+
+    __table_args__ = (Index("uq_notified_user_apt", "uid", "chat_id", unique=True),)
+
+
+class ExtensionPairing(Base):
+    __tablename__ = "extension_pairing"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    chat_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("user.chat_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    pin_code: Mapped[str] = mapped_column(
+        String(6), nullable=False, unique=True, index=True
+    )
+    pin_expires_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    token: Mapped[t.Optional[str]] = mapped_column(String(255), unique=True, index=True)
+    token_expires_at: Mapped[t.Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    consumed_at: Mapped[t.Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="pairings")

@@ -1,90 +1,102 @@
-# 🏠 Apartment Notifier Bot
+# Aptly
 
-An asynchronous Python bot for real estate monitoring. It scrapes **4 websites** every 3 minutes, filters listings based on your specific criteria, and instantly sends new matches to Telegram.
+## Overview
 
----
+`Aptly` is a two-service monorepo for Telegram-driven apartment discovery and browser-side form automation.
 
-## 🚀 Key Features
+- `bot/` runs the Telegram bot, PostgreSQL persistence layer, scraping loop, `POST /api/pair`, and the persistent websocket server on the same event loop.
+- `extension/` is a Chrome Manifest V3 extension built with Svelte, Vite, and Bun for pairing, receiving profile updates, and executing autofill flows in the browser.
 
-* **Multi-site Scraping:** Parallel data collection from multiple real estate platforms.
-* **Flexible Filters:** Configure price, rooms, area, and social status (WBS) directly via chat commands.
-* **Smart Notifications:** Prevents duplicates and "warms up" the seen-listings cache on startup.
-* **Preview Mode:** Automatically searches for matching listings immediately after filter updates.
-* **Full Containerization:** Ready-to-use Docker image with an optimized multi-stage build.
+## Architecture
 
----
+### 1. Bot service
 
-## ⚙️ Quick Start
+- `aiogram` Telegram worker
+- `aiohttp` HTTP + websocket server
+- SQLAlchemy + Alembic + PostgreSQL
+- pairing PIN generation and token issuance
+- FSM-based profile collection and profile synchronization
 
-### 1. Environment Setup
-Create a `.env` file from the example and fill in your details (Bot Token, Chat ID, DB credentials):
+### 2. Extension service
+
+- Manifest V3 background worker
+- popup UI in Svelte
+- dynamic schema loading from `autofilled-rules.json`
+- websocket authentication using the pairing token
+- in-memory hydration of rule values from Telegram profile data
+
+## Core Features
+
+- Telegram filter configuration for apartment search
+- Telegram profile collection for autofill data
+- 6-digit pairing PIN generation
+- `POST /api/pair` token exchange
+- websocket `profile_updated` push to a paired extension
+- runtime rule hydration without hardcoding form schema in TypeScript
+- popup controls for `Auto-Fill`, `Auto-Submit`, `Execute Fill`, selector picking, import, and export
+
+## Tech Stack
+
+### Backend
+
+- Python 3.14+
+- aiogram
+- aiohttp
+- SQLAlchemy 2.x
+- Alembic
+- PostgreSQL
+- Playwright
+- pytest + pytest-asyncio + pytest-mock
+
+### Extension
+
+- Bun
+- TypeScript
+- Svelte
+- Vite
+- Vitest
+- Testing Library
+
+## Repository Layout
+
+- [`bot`](./bot)
+- [`extension`](./extension)
+- [`QUICK_START.md`](./QUICK_START.md)
+- [`start.sh`](./start.sh)
+
+## Local Development
+
+### Bot
+
 ```bash
-cp .env.example .env
-
+cd bot
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+alembic upgrade head
+python -m app.main
 ```
 
-### 2. Launch the Project
-
-Management is handled via the `Makefile`. To build and run the project, execute:
+### Extension
 
 ```bash
-make build
-make up
-make logs
-
+cd extension
+bun install
+bun run dev
 ```
 
-### 3. Database Initialization
+## Test Entry Points
 
-After the first launch, you need to initialize the table structure:
+### Bot
 
 ```bash
-make db-create
-make db-migrate
+cd bot
+.venv/bin/pytest -v
 ```
 
----
+### Extension
 
-## ⌨️ Makefile Commands
-
-Convenient shortcuts for container and database management:
-
-| Command | Description |
-| --- | --- |
-| `make up` | Start the project in the background (detached) |
-| `make down` | Stop and remove containers along with volumes |
-| `make build` | Build Docker images |
-| `make logs` | View real-time bot logs |
-| `make restart` | Restart the bot container |
-| `make db-create` | Initialize tables in the database |
-| `make db-migrate` | Apply existing Alembic migrations |
-| `make make-migration m="text"` | Create a new migration (autogenerate) |
----
-
-## 🤖 Telegram Bot Interface
-
-The bot uses an inline button menu instead of text commands.
-
-| Button | Description |
-| --- | --- |
-| `/start` or `/menu` | Open the filter menu |
-| 🚪 Rooms | Select room range from presets |
-| 💰 Price | Select price range from presets |
-| 📐 Area | Select area range from presets |
-| 📋 Status | Select social status (any / wbs / market) |
-| 👁 Show filter | Display current filter settings |
-| 🔄 Reset | Reset all filters |
-| ⏸ Pause / ▶️ Resume | Pause or resume notifications |
-| 🌐 EN / 🌐 RU | Switch interface language |
-
----
-
-## 🛠 Tech Stack
-
-* **Language:** Python 3.14+ (Asyncio)
-* **Bot Framework:** aiogram 3.x
-* **Database:** PostgreSQL
-* **Migrations:** Alembic
-* **Linting/Formatting:** Ruff & Mypy
-* **Orchestration:** Docker & Compose
----
+```bash
+cd extension
+bun test
+```
