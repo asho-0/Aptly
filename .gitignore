@@ -71,4 +71,9 @@ bot/.venv/
 extension/node_modules/
 extension/dist/
 
-docs
+
+docs/cleanup_report.md
+docs/ORION_IPHONE_LOAD_FAILED.md
+docs/QUICK_START.md
+docs/quick_test.md
+docs/repository_structure.md

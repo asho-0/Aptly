@@ -49,6 +49,22 @@ class TestSendText:
         args, _ = bot.send_message.call_args
         assert args[0] == 999
 
+    @pytest.mark.asyncio
+    async def test_retries_after_flood_control(self, notifier, bot, mocker):
+        retry_error = TelegramAPIError(method=mocker.MagicMock(), message="retry later")
+        retry_error.retry_after = 1
+        bot.send_message.side_effect = [retry_error, mocker.AsyncMock()]
+
+        sleep_mock = mocker.patch(
+            "app.telegram.notifier.notifier.asyncio.sleep", new=mocker.AsyncMock()
+        )
+
+        result = await notifier.send_text(123, "Hello")
+
+        assert result is True
+        assert bot.send_message.await_count == 2
+        sleep_mock.assert_awaited()
+
 
 class TestSendApartment:
 

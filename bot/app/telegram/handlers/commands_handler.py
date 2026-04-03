@@ -62,8 +62,18 @@ PROFILE_FIELDS: list[tuple[str, State, str, str]] = [
     ("house_number", ProfileStates.house_number, "text", "profile_prompt_house_number"),
     ("zip_code", ProfileStates.zip_code, "text", "profile_prompt_zip_code"),
     ("city", ProfileStates.city, "text", "profile_prompt_city"),
-    ("persons_total", ProfileStates.persons_total, "text", "profile_prompt_persons_total"),
-    ("wbs_available", ProfileStates.wbs_available, "choice", "profile_prompt_wbs_available"),
+    (
+        "persons_total",
+        ProfileStates.persons_total,
+        "text",
+        "profile_prompt_persons_total",
+    ),
+    (
+        "wbs_available",
+        ProfileStates.wbs_available,
+        "choice",
+        "profile_prompt_wbs_available",
+    ),
     ("wbs_date", ProfileStates.wbs_date, "text", "profile_prompt_wbs_date"),
     ("wbs_rooms", ProfileStates.wbs_rooms, "text", "profile_prompt_wbs_rooms"),
     ("wbs_income", ProfileStates.wbs_income, "choice", "profile_prompt_wbs_income"),
@@ -192,7 +202,9 @@ class CallbackHandlers:
             house_number=data["house_number"] or "—",
             zip_code=data["zip_code"] or "—",
             city=data["city"] or "—",
-            persons_total=data["persons_total"] if data["persons_total"] is not None else "—",
+            persons_total=(
+                data["persons_total"] if data["persons_total"] is not None else "—"
+            ),
             wbs_available="Ja" if data["wbs_available"] else "Nein",
             wbs_date=data["wbs_date"] or "—",
             wbs_rooms=data["wbs_rooms"] if data["wbs_rooms"] is not None else "—",
@@ -391,12 +403,13 @@ class CallbackHandlers:
                 return
         elif current_field == "wbs_date":
             try:
-                value = datetime.date.fromisoformat(text)
+                datetime.datetime.strptime(text, "%d.%m.%Y")
             except ValueError:
                 await message.answer(
                     self.ctrl.translate("profile_invalid_date", lang=store.lang)
                 )
                 return
+            value = text
 
         await state.update_data(**{current_field: value})
         await self._advance_profile(message, state, store.lang)

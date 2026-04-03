@@ -4,7 +4,6 @@ import typing as t
 from sqlalchemy import (
     BigInteger,
     Boolean,
-    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -38,8 +37,10 @@ class User(Base):
     zip_code: Mapped[t.Optional[str]] = mapped_column(String(32))
     city: Mapped[t.Optional[str]] = mapped_column(String(128))
     persons_total: Mapped[t.Optional[int]] = mapped_column(SmallInteger)
-    wbs_available: Mapped[bool] = mapped_column(Boolean, server_default="false", nullable=False)
-    wbs_date: Mapped[t.Optional[datetime.date]] = mapped_column(Date)
+    wbs_available: Mapped[bool] = mapped_column(
+        Boolean, server_default="false", nullable=False
+    )
+    wbs_date: Mapped[t.Optional[str]] = mapped_column(String(10))
     wbs_rooms: Mapped[t.Optional[int]] = mapped_column(SmallInteger)
     wbs_income: Mapped[t.Optional[int]] = mapped_column(SmallInteger)
     pairing_pin: Mapped[t.Optional[str]] = mapped_column(String(6), index=True)

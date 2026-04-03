@@ -29,6 +29,10 @@ type PairResponse = {
   profile: UserProfile
 }
 
+type PairingUrlValidation =
+  | { ok: true; apiBase: string; wsUrl: string }
+  | { ok: false; error: string }
+
 let socket: WebSocket | null = null
 let baseDomainRulesCache: Record<string, Rule[]> | null = null
 
@@ -98,6 +102,61 @@ function mapWsToHttpBase(wsUrl: string): string {
   return parsed.toString().replace(/\/$/, '')
 }
 
+function mapHttpToWsUrl(httpUrl: string): string {
+  const parsed = new URL(httpUrl)
+  parsed.protocol = parsed.protocol === 'https:' ? 'wss:' : 'ws:'
+  parsed.pathname = '/ws/extension'
+  parsed.search = ''
+  parsed.hash = ''
+  return parsed.toString()
+}
+
+function describeLocalhostPairing(hostname: string): string {
+  return [
+    `VITE_WS_URL points to ${hostname}. On iPhone or any other external device, ${hostname} means that device itself.`,
+    'Use a reachable public host/domain, VPN, or tunnel.',
+    'Use your Mac LAN IP only if both devices are on the same network.',
+  ].join(' ')
+}
+
+export function validatePairingUrl(rawUrl: string): PairingUrlValidation {
+  if (!rawUrl) {
+    return { ok: false, error: 'Backend URL is not configured.' }
+  }
+
+  let parsed: URL
+  try {
+    parsed = new URL(rawUrl)
+  } catch {
+    return { ok: false, error: `Backend URL is invalid: ${rawUrl}` }
+  }
+
+  if (!['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol)) {
+    return { ok: false, error: `Backend URL must use http://, https://, ws://, or wss://. Received: ${parsed.protocol}` }
+  }
+
+  const hostname = parsed.hostname.trim().toLowerCase()
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+    return { ok: false, error: describeLocalhostPairing(hostname) }
+  }
+
+  const wsUrl = parsed.protocol === 'http:' || parsed.protocol === 'https:'
+    ? mapHttpToWsUrl(parsed.toString())
+    : parsed.toString()
+  return { ok: true, apiBase: mapWsToHttpBase(wsUrl), wsUrl }
+}
+
+function isPairResponse(value: unknown): value is PairResponse {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const payload = value as Record<string, unknown>
+  return typeof payload.token === 'string'
+    && typeof payload.chatId === 'string'
+    && typeof payload.profile === 'object'
+    && payload.profile !== null
+}
+
 async function loadBaseDomainRules(): Promise<Record<string, Rule[]>> {
   if (baseDomainRulesCache) {
     return cloneDomainRules(baseDomainRulesCache)
@@ -127,10 +186,12 @@ async function applyProfileToVault(profile: UserProfile): Promise<VaultData> {
 }
 
 async function ensureSocket(): Promise<void> {
-  if (!WS_URL) {
+  const vault = await getVaultData()
+  const rawUrl = vault.backendUrl.trim() || WS_URL
+  const validation = validatePairingUrl(rawUrl)
+  if (!validation.ok) {
     return
   }
-  const vault = await getVaultData()
   const token = vault.extensionToken.trim()
   if (!token) {
     return
@@ -138,7 +199,7 @@ async function ensureSocket(): Promise<void> {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
     return
   }
-  socket = new WebSocket(WS_URL)
+  socket = new WebSocket(validation.wsUrl)
   socket.addEventListener('open', () => {
     socket?.send(JSON.stringify({ type: 'authenticate', token }))
   })
@@ -347,21 +408,48 @@ async function handleSocketMessage(rawMessage: string): Promise<void> {
   }
 }
 
-async function pairWithPin(pin: string): Promise<{ ok: boolean; error?: string; vault?: VaultData }> {
-  if (!WS_URL) {
-    return { ok: false, error: 'VITE_WS_URL is not configured' }
+export async function pairWithPin(pin: string): Promise<{ ok: boolean; error?: string; vault?: VaultData }> {
+  const vault = await getVaultData()
+  const rawUrl = vault.backendUrl.trim() || WS_URL
+  const validation = validatePairingUrl(rawUrl)
+  if (!validation.ok) {
+    return { ok: false, error: validation.error }
   }
-  const apiBase = mapWsToHttpBase(WS_URL)
-  const response = await fetch(`${apiBase}/api/pair`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pin }),
-  })
+
+  const pairUrl = `${validation.apiBase}/api/pair`
+  let response: Response
+  try {
+    response = await fetch(pairUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin }),
+    })
+  } catch {
+    return {
+      ok: false,
+      error: [
+        `Network request failed while calling ${pairUrl}.`,
+        'Check that the backend is reachable from this device.',
+        'If iPhone and Mac are in different networks, a LAN IP will not work. Use a public domain/IP, VPN, or tunnel.',
+      ].join(' '),
+    }
+  }
+
   if (!response.ok) {
     const payload = await response.json().catch(() => ({} as Record<string, string>))
-    return { ok: false, error: String(payload.error || 'Invalid PIN') }
+    return { ok: false, error: String(payload.error || `Pairing request failed with HTTP ${response.status}`) }
   }
-  const paired = await response.json() as PairResponse
+
+  let paired: unknown
+  try {
+    paired = await response.json()
+  } catch {
+    return { ok: false, error: 'Unexpected response format from /api/pair.' }
+  }
+  if (!isPairResponse(paired)) {
+    return { ok: false, error: 'Unexpected response format from /api/pair.' }
+  }
+
   const hydratedVault = await applyProfileToVault(profileFromUnknown(paired.profile))
   const nextVault: VaultData = {
     ...hydratedVault,
@@ -413,69 +501,75 @@ function setupKeepalive(): void {
   chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 })
 }
 
-chrome.runtime.onInstalled.addListener(() => {
+export function initializeBackground(): void {
+  chrome.runtime.onInstalled.addListener(() => {
+    setupKeepalive()
+    void initializeBaseRules()
+    void ensureSocket()
+  })
+
+  chrome.runtime.onStartup.addListener(() => {
+    setupKeepalive()
+    void initializeBaseRules()
+    void ensureSocket()
+  })
+
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === KEEPALIVE_ALARM || alarm.name === RECONNECT_ALARM) {
+      void ensureSocket()
+    }
+  })
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local' || !changes.vaultData) {
+      return
+    }
+    if (socket) {
+      socket.close()
+    } else {
+      void ensureSocket()
+    }
+  })
+
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.type === 'request_fill_data') {
+      getVaultData().then((vault) => {
+        sendResponse({ success: true, vault })
+      })
+      return true
+    }
+    if (msg.type === 'pair_with_pin') {
+      pairWithPin(String(msg.pin || '').trim())
+        .then((result) => sendResponse(result))
+        .catch((error: unknown) => {
+          sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) })
+        })
+      return true
+    }
+    if (msg.type === 'reset_pairing') {
+      resetPairing()
+        .then((result) => sendResponse(result))
+        .catch(() => {
+          sendResponse({ ok: false, error: 'Failed to reset pairing' })
+        })
+      return true
+    }
+    if (msg.type === 'execute_fill_in_tab') {
+      fillTab(Number(msg.tabId))
+        .then((result) => sendResponse(result))
+        .catch((error: unknown) => {
+          sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) })
+        })
+      return true
+    }
+    return false
+  })
+
   setupKeepalive()
   void initializeBaseRules()
   void ensureSocket()
-})
+}
 
-chrome.runtime.onStartup.addListener(() => {
-  setupKeepalive()
-  void initializeBaseRules()
-  void ensureSocket()
-})
-
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === KEEPALIVE_ALARM || alarm.name === RECONNECT_ALARM) {
-    void ensureSocket()
-  }
-})
-
-chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName !== 'local' || !changes.vaultData) {
-    return
-  }
-  if (socket) {
-    socket.close()
-  } else {
-    void ensureSocket()
-  }
-})
-
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.type === 'request_fill_data') {
-    getVaultData().then((vault) => {
-      sendResponse({ success: true, vault })
-    })
-    return true
-  }
-  if (msg.type === 'pair_with_pin') {
-    pairWithPin(String(msg.pin || '').trim())
-      .then((result) => sendResponse(result))
-      .catch((error: unknown) => {
-        sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) })
-      })
-    return true
-  }
-  if (msg.type === 'reset_pairing') {
-    resetPairing()
-      .then((result) => sendResponse(result))
-      .catch(() => {
-        sendResponse({ ok: false, error: 'Failed to reset pairing' })
-      })
-    return true
-  }
-  if (msg.type === 'execute_fill_in_tab') {
-    fillTab(Number(msg.tabId))
-      .then((result) => sendResponse(result))
-      .catch((error: unknown) => {
-        sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) })
-      })
-    return true
-  }
-  return false
-})
-
-setupKeepalive()
-void initializeBaseRules()
-void ensureSocket()
+if (!import.meta.vitest) {
+  initializeBackground()
+}

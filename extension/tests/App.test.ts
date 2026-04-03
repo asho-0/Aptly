@@ -9,6 +9,7 @@ type ChromeMockOptions = {
   pairResponse?: VaultData
   resetResponse?: VaultData
   activeUrl?: string
+  pairError?: string
 }
 
 function createVault(overrides: Partial<VaultData> = {}): VaultData {
@@ -34,6 +35,12 @@ function installChromeMock(options: ChromeMockOptions = {}) {
   }
   const sendMessage = vi.fn(async (message: { type: string }) => {
     if (message.type === 'pair_with_pin') {
+      if (options.pairError) {
+        return {
+          ok: false,
+          error: options.pairError,
+        }
+      }
       return {
         ok: true,
         vault: options.pairResponse ?? createVault({
@@ -139,5 +146,37 @@ describe('App.svelte', () => {
     render(App)
 
     expect(await screen.findByText('⚡ Aptly')).toBeTruthy()
+  })
+
+  test('shows iPhone/orion pairing hint and detailed pairing error', async () => {
+    const user = userEvent.setup()
+    installChromeMock({
+      pairError: 'Network request failed while calling https://bot.example.com/api/pair. If iPhone and Mac are in different networks, a LAN IP will not work.',
+    })
+
+    render(App)
+
+    expect(await screen.findByText(/127\.0\.0\.1/)).toBeTruthy()
+    expect(screen.getByText(/different networks/)).toBeTruthy()
+    expect(screen.getByPlaceholderText(/Backend URL/)).toBeTruthy()
+
+    const pinInput = await screen.findByPlaceholderText('Enter 6-digit Pairing PIN')
+    await user.type(pinInput, '123456')
+    await user.click(screen.getByRole('button', { name: 'Connect' }))
+
+    expect(await screen.findByText(/Pairing failed\./)).toBeTruthy()
+    expect(screen.getByText(/Network request failed while calling/)).toBeTruthy()
+  })
+
+  test('persists runtime backend url without rebuild', async () => {
+    const user = userEvent.setup()
+    const { storage } = installChromeMock()
+
+    render(App)
+
+    const backendInput = await screen.findByPlaceholderText(/Backend URL/)
+    await user.type(backendInput, 'https://demo.example.com')
+
+    expect((storage.vaultData as VaultData).backendUrl).toBe('https://demo.example.com')
   })
 })

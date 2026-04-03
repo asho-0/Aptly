@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -117,7 +115,7 @@ async def test_profile_text_persists_profile_and_broadcasts_update(
         wbs_available=True,
         wbs_rooms=2,
         wbs_income=100,
-        wbs_date=datetime.date(2026, 4, 1),
+        wbs_date="01.04.2026",
     )
 
     message = mocker.Mock()
@@ -147,7 +145,7 @@ async def test_profile_text_persists_profile_and_broadcasts_update(
     assert user.wbs_available is True
     assert user.wbs_rooms == 2
     assert user.wbs_income == 100
-    assert user.wbs_date == datetime.date(2026, 4, 1)
+    assert user.wbs_date == "01.04.2026"
     assert await state.get_state() is None
     controller.extension_gateway.push_profile.assert_awaited_once_with(
         "123",
@@ -163,8 +161,27 @@ async def test_profile_text_persists_profile_and_broadcasts_update(
             "city": "Berlin",
             "persons_total": 2,
             "wbs_available": True,
-            "wbs_date": "2026-04-01",
+            "wbs_date": "01.04.2026",
             "wbs_rooms": 2,
             "wbs_income": 100,
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_profile_text_accepts_german_wbs_date_format(mocker) -> None:
+    controller = build_controller(mocker)
+    callbacks = CallbackHandlers(controller)
+    state = build_state()
+
+    await state.set_state(ProfileStates.wbs_date)
+
+    message = mocker.Mock()
+    message.chat.id = 123
+    message.text = "20.12.2026"
+    message.answer = mocker.AsyncMock()
+
+    await callbacks.handle_profile_text(message, state)
+
+    assert await state.get_state() == ProfileStates.wbs_rooms.state
+    assert (await state.get_data())["wbs_date"] == "20.12.2026"

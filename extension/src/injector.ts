@@ -62,6 +62,9 @@ function resolveRuleValue(domain: string, rule: Rule, profile: UserProfile): str
   if (rule.valueKey === 'self_usage') {
     return 'Für mich selbst '
   }
+  if (rule.valueKey === 'wbs_date') {
+    return profile.wbs_date
+  }
   if (rule.valueKey === 'wbs_income') {
     if (profile.wbs_income === null) return ''
     if (domain === 'gewobag.de') return `WBS ${profile.wbs_income}`

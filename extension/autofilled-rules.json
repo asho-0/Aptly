@@ -33,6 +33,24 @@
         "valueKey": "persons_total"
       },
       {
+        "selector": "#formly_4_radio_\\$\\$_wbs_available_\\$\\$_0-Ja",
+        "value": "",
+        "valueKey": "wbs_available",
+        "type": "checkbox"
+      },
+      {
+        "selector": "#formly_5_input_\\$\\$_wbs_valid_until_\\$\\$_0",
+        "value": "",
+        "valueKey": "wbs_date",
+        "type": "value"
+      },
+      {
+        "selector": "#formly_5_select_\\$\\$_wbs_max_number_rooms_\\$\\$_1_select > div",
+        "value": "",
+        "valueKey": "wbs_rooms",
+        "type": "click"
+      },
+      {
         "selector": "#formly_7_select_degewo_fuer_wen_ist_wohnungsanfrage_0_select > div",
         "value": "",
         "valueKey": "self_usage",
@@ -105,7 +123,8 @@
       {
         "selector": "#formly_6_input_\\$\\$_wbs_valid_until_\\$\\$_0",
         "value": "",
-        "valueKey": "wbs_date"
+        "valueKey": "wbs_date",
+        "type": "value"
       },
       {
         "selector": "#formly_6_select_gewobag_art_bezeichnung_des_wbs_1_select > div",

@@ -1,8 +1,8 @@
-"""initial
+"""store wbs date as string
 
-Revision ID: 52ad749421f4
+Revision ID: d5c3a8e11ec7
 Revises:
-Create Date: 2026-03-20 20:41:53.692770+00:00
+Create Date: 2026-04-03 10:59:21.948587+00:00
 
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision: str = "52ad749421f4"
+revision: str = "d5c3a8e11ec7"
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -31,12 +31,14 @@ def upgrade() -> None:
         sa.Column("title", sa.Text(), nullable=False),
         sa.Column("url", sa.Text(), nullable=False),
         sa.Column("price", sa.Numeric(precision=12, scale=2), nullable=True),
+        sa.Column("cold_rent", sa.Numeric(precision=12, scale=2), nullable=True),
+        sa.Column("extra_costs", sa.Numeric(precision=12, scale=2), nullable=True),
         sa.Column(
             "currency", sa.String(length=10), server_default="EUR", nullable=False
         ),
         sa.Column("rooms", sa.SmallInteger(), nullable=True),
         sa.Column("sqm", sa.Numeric(precision=8, scale=2), nullable=True),
-        sa.Column("floor", sa.SmallInteger(), nullable=True),
+        sa.Column("floor", sa.Text(), nullable=True),
         sa.Column("address", sa.Text(), nullable=True),
         sa.Column("district", sa.String(length=128), nullable=True),
         sa.Column(
@@ -95,6 +97,29 @@ def upgrade() -> None:
         sa.Column("chat_id", sa.String(length=64), nullable=False),
         sa.Column("username", sa.String(length=128), nullable=True),
         sa.Column("full_name", sa.String(length=255), nullable=True),
+        sa.Column("first_name", sa.String(length=128), nullable=True),
+        sa.Column("last_name", sa.String(length=128), nullable=True),
+        sa.Column("salutation", sa.String(length=16), nullable=True),
+        sa.Column("email", sa.String(length=255), nullable=True),
+        sa.Column("phone", sa.String(length=64), nullable=True),
+        sa.Column("street", sa.String(length=255), nullable=True),
+        sa.Column("house_number", sa.String(length=64), nullable=True),
+        sa.Column("zip_code", sa.String(length=32), nullable=True),
+        sa.Column("city", sa.String(length=128), nullable=True),
+        sa.Column("persons_total", sa.SmallInteger(), nullable=True),
+        sa.Column(
+            "wbs_available", sa.Boolean(), server_default="false", nullable=False
+        ),
+        sa.Column("wbs_date", sa.String(length=10), nullable=True),
+        sa.Column("wbs_rooms", sa.SmallInteger(), nullable=True),
+        sa.Column("wbs_income", sa.SmallInteger(), nullable=True),
+        sa.Column("pairing_pin", sa.String(length=6), nullable=True),
+        sa.Column(
+            "show_special_listings",
+            sa.Boolean(),
+            server_default="false",
+            nullable=False,
+        ),
         sa.Column(
             "language", sa.String(length=10), server_default="en", nullable=False
         ),
@@ -109,6 +134,52 @@ def upgrade() -> None:
     )
     op.create_index(op.f("ix_user_chat_id"), "user", ["chat_id"], unique=True)
     op.create_index(op.f("ix_user_is_active"), "user", ["is_active"], unique=False)
+    op.create_index(op.f("ix_user_pairing_pin"), "user", ["pairing_pin"], unique=False)
+    op.create_table(
+        "extension_pairing",
+        sa.Column("id", sa.BigInteger(), nullable=False),
+        sa.Column("chat_id", sa.String(length=64), nullable=False),
+        sa.Column("pin_code", sa.String(length=6), nullable=False),
+        sa.Column("pin_expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("token", sa.String(length=255), nullable=True),
+        sa.Column("token_expires_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("consumed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.ForeignKeyConstraint(["chat_id"], ["user.chat_id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        op.f("ix_extension_pairing_chat_id"),
+        "extension_pairing",
+        ["chat_id"],
+        unique=False,
+    )
+    op.create_index(
+        op.f("ix_extension_pairing_pin_code"),
+        "extension_pairing",
+        ["pin_code"],
+        unique=True,
+    )
+    op.create_index(
+        op.f("ix_extension_pairing_pin_expires_at"),
+        "extension_pairing",
+        ["pin_expires_at"],
+        unique=False,
+    )
+    op.create_index(
+        op.f("ix_extension_pairing_token"), "extension_pairing", ["token"], unique=True
+    )
+    op.create_index(
+        op.f("ix_extension_pairing_token_expires_at"),
+        "extension_pairing",
+        ["token_expires_at"],
+        unique=False,
+    )
     op.create_table(
         "filter",
         sa.Column("id", sa.BigInteger(), nullable=False),
@@ -173,6 +244,17 @@ def downgrade() -> None:
     op.drop_table("notified_listing")
     op.drop_index(op.f("ix_filter_paused"), table_name="filter")
     op.drop_table("filter")
+    op.drop_index(
+        op.f("ix_extension_pairing_token_expires_at"), table_name="extension_pairing"
+    )
+    op.drop_index(op.f("ix_extension_pairing_token"), table_name="extension_pairing")
+    op.drop_index(
+        op.f("ix_extension_pairing_pin_expires_at"), table_name="extension_pairing"
+    )
+    op.drop_index(op.f("ix_extension_pairing_pin_code"), table_name="extension_pairing")
+    op.drop_index(op.f("ix_extension_pairing_chat_id"), table_name="extension_pairing")
+    op.drop_table("extension_pairing")
+    op.drop_index(op.f("ix_user_pairing_pin"), table_name="user")
     op.drop_index(op.f("ix_user_is_active"), table_name="user")
     op.drop_index(op.f("ix_user_chat_id"), table_name="user")
     op.drop_table("user")

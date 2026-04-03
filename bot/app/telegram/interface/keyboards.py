@@ -188,8 +188,12 @@ def profile_wbs_available_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="Ja", callback_data="profile_wbs_available:true"),
-                InlineKeyboardButton(text="Nein", callback_data="profile_wbs_available:false"),
+                InlineKeyboardButton(
+                    text="Ja", callback_data="profile_wbs_available:true"
+                ),
+                InlineKeyboardButton(
+                    text="Nein", callback_data="profile_wbs_available:false"
+                ),
             ]
         ]
     )

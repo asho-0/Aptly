@@ -40,6 +40,7 @@ describe('injector', () => {
           { selector: '#street', value: '', valueKey: 'address_full' },
         ],
         'gewobag.de': [
+          { selector: '#date', value: '', valueKey: 'wbs_date' },
           { selector: '#income', value: '', valueKey: 'wbs_income' },
           { selector: '#rooms', value: '', valueKey: 'wbs_rooms' },
         ],
@@ -56,7 +57,7 @@ describe('injector', () => {
         city: 'Berlin',
         persons_total: 2,
         wbs_available: true,
-        wbs_date: '2026-04-01',
+        wbs_date: '01.04.2026',
         wbs_rooms: 2,
         wbs_income: 140,
       },
@@ -65,8 +66,9 @@ describe('injector', () => {
     expect(hydrated['degewo.de'][0].value).toBe('Asho')
     expect(hydrated['degewo.de'][1].value).toBe('10115')
     expect(hydrated['wbm.de'][0].value).toBe('Teststrasse 1')
-    expect(hydrated['gewobag.de'][0].value).toBe('WBS 140')
-    expect(hydrated['gewobag.de'][1].value).toBe('2 Räume ')
+    expect(hydrated['gewobag.de'][0].value).toBe('01.04.2026')
+    expect(hydrated['gewobag.de'][1].value).toBe('WBS 140')
+    expect(hydrated['gewobag.de'][2].value).toBe('2 Räume ')
   })
 
   test('executes without throwing when rules target interactive elements', async () => {
@@ -107,5 +109,22 @@ describe('injector', () => {
     expect(wrapperSpy).toHaveBeenCalled()
     expect(menuSpy).toHaveBeenCalled()
     expect(optionSpy).toHaveBeenCalled()
+  })
+
+  test('checks checkbox rules backed by always_true', async () => {
+    document.body.innerHTML = '<input id="privacy" type="checkbox" />'
+    const checkbox = document.querySelector<HTMLInputElement>('#privacy')!
+    const host = window.location.hostname
+
+    const applied = await executeVaultFill(createVault({
+      domainRules: {
+        [host]: [
+          { selector: '#privacy', value: '', valueKey: 'always_true', type: 'checkbox' },
+        ],
+      },
+    }))
+
+    expect(applied).toBe(1)
+    expect(checkbox.checked).toBe(true)
   })
 })

@@ -26,6 +26,7 @@ export interface UserProfile {
 
 export interface VaultData {
   autoFillEnabled: boolean
+  backendUrl: string
   domainRules: Record<string, Rule[]>
   pairPin: string
   extensionToken: string
@@ -55,6 +56,7 @@ export type BgResponse =
 
 export const VAULT_DEFAULTS: VaultData = {
   autoFillEnabled: false,
+  backendUrl: '',
   domainRules: {},
   pairPin: '',
   extensionToken: '',

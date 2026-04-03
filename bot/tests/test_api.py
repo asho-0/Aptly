@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import datetime
-
 import pytest
 from aiohttp.test_utils import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,7 +30,7 @@ async def create_profiled_user(
         wbs_available=True,
         wbs_rooms=2,
         wbs_income=100,
-        wbs_date=datetime.date(2026, 4, 1),
+        wbs_date="01.04.2026",
     )
     session.add(user)
     await session.flush()
@@ -67,7 +65,7 @@ async def test_pair_endpoint_returns_profile_and_invalidates_pin(
         "city": "Berlin",
         "persons_total": 2,
         "wbs_available": True,
-        "wbs_date": "2026-04-01",
+        "wbs_date": "01.04.2026",
         "wbs_rooms": 2,
         "wbs_income": 100,
     }

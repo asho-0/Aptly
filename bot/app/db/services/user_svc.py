@@ -1,4 +1,3 @@
-import datetime
 import typing as t
 
 from app.core.apartment import ApartmentFilter
@@ -112,11 +111,7 @@ class UserService:
             "city": user.city or "",
             "persons_total": user.persons_total,
             "wbs_available": bool(user.wbs_available),
-            "wbs_date": (
-                user.wbs_date.isoformat()
-                if isinstance(user.wbs_date, datetime.date)
-                else ""
-            ),
+            "wbs_date": user.wbs_date or "",
             "wbs_rooms": user.wbs_rooms,
             "wbs_income": user.wbs_income,
         }

@@ -67,7 +67,7 @@
       { ok: boolean; error?: string; vault?: VaultData }
 
     if (!response?.ok || !response.vault) {
-      flash(`✗ ${response?.error ?? 'Pairing failed'}`, false)
+      flash(`✗ Pairing failed. ${response?.error ?? 'Check extension backend connection.'}`, false)
       return
     }
 
@@ -286,12 +286,23 @@
           <input
             class="field"
             type="text"
+            placeholder="Backend URL: https://... or wss://..."
+            value={vault.backendUrl}
+            on:input={(e) => { vault.backendUrl = e.currentTarget.value.trim(); persist() }}
+          />
+          <input
+            class="field"
+            type="text"
             inputmode="numeric"
             maxlength="6"
             placeholder="Enter 6-digit Pairing PIN"
             value={vault.pairPin}
             on:input={(e) => { vault.pairPin = e.currentTarget.value.replace(/\D/g, '').slice(0, 6); persist() }}
           />
+          <p class="text-[10px] leading-4 text-gray-500">
+            If Orion runs on iPhone, `127.0.0.1` or `localhost` only works when the backend runs on that same device.
+            You can paste either `https://host` or `wss://host/ws/extension` above. Use a reachable public host, VPN, or tunnel when iPhone and Mac are in different networks.
+          </p>
           <button class="btn-primary py-1.5 text-xs" on:click={pairWithPin}>Connect</button>
         {/if}
       </div>
@@ -387,7 +398,7 @@
     >⚡ Execute Fill</button>
 
     {#if status}
-      <p class="text-center text-[11px] -mt-3"
+      <p class="text-center text-[11px] -mt-3 whitespace-pre-line"
          class:text-emerald-400={statusOk}
          class:text-red-400={!statusOk}>{status}</p>
     {/if}
