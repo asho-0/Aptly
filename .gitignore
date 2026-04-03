@@ -1,15 +1,79 @@
-.venv
-__pycache__
-__pytest_cache__
-.idea
-.vscode
+# OS
 .DS_Store
-.git
-.coverage
-.ruff_cache
+Thumbs.db
+
+# Environment files
 .env
-ruff.toml
-.env.example
-.mypy_cache
-.env.test1
-.pytest_cache
+.env.local
+.env.development
+.env.production
+.env.test
+!.env.example
+!.env.test.example
+!.env.*.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+.tox/
+.nox/
+.venv/
+venv/
+env/
+ENV/
+pip-wheel-metadata/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.sqlite-journal
+
+# Node / Bun / Vite
+node_modules/
+dist/
+.vite/
+coverage/
+bun.lockb
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Logs
+*.log
+logs/
+
+# IDE
+.idea/
+.vscode/
+
+# Build artifacts
+*.egg-info/
+build/
+
+
+# Project-specific generated output
+bot/logs/
+bot/.pytest_cache/
+bot/.venv/
+extension/node_modules/
+extension/dist/
+
+
+docs/cleanup_report.md
+docs/ORION_IPHONE_LOAD_FAILED.md
+docs/QUICK_START.md
+docs/quick_test.md
+docs/repository_structure.md
