@@ -1,6 +1,7 @@
 import typing as t
 
 import asyncio
+from collections.abc import Coroutine
 
 from app.db.session import db
 from app.core.apartment import ApartmentFilter
@@ -33,13 +34,18 @@ class FilterStore:
                 lang=self._lang,
             )
 
+    def _schedule(self, coroutine: Coroutine[object, object, object]) -> None:
+        task = asyncio.create_task(coroutine)
+        if not isinstance(task, asyncio.Task):
+            coroutine.close()
+
     def set_paused(self, paused: bool) -> None:
         self._paused = paused
-        asyncio.create_task(self._persist())
+        self._schedule(self._persist())
 
     def set_lang(self, lang: str) -> None:
         self._lang = lang
-        asyncio.create_task(self._persist_lang())
+        self._schedule(self._persist_lang())
 
     @property
     def lang(self) -> str:
@@ -59,11 +65,11 @@ class FilterStore:
 
     def set_show_special_listings(self, enabled: bool) -> None:
         self._show_special_listings = enabled
-        asyncio.create_task(self._persist_show_special_listings())
+        self._schedule(self._persist_show_special_listings())
 
     def reset_to_defaults(self) -> None:
         self._filter = self._filter_svc.build_default_filter()
-        asyncio.create_task(self._persist())
+        self._schedule(self._persist())
 
     async def _persist_lang(self) -> None:
         async with db.session_context():
@@ -116,11 +122,13 @@ class UserRegistry:
                 return store
 
     async def fetch_all_active(self) -> list[tuple[str, FilterStore]]:
+        active_chat_ids: list[str] = []
         async with db.session_context():
             user_svc = UserService()
             users = await user_svc.repo.get_all_active_users()
 
             for user in users:
+                active_chat_ids.append(user.chat_id)
                 if user.chat_id not in self._stores:
                     domain_filter = user_svc.convert_to_domain(user.filters)
                     lang = (
@@ -136,4 +144,8 @@ class UserRegistry:
                         lang,
                         bool(user.show_special_listings),
                     )
-        return list(self._stores.items())
+        return [
+            (chat_id, self._stores[chat_id])
+            for chat_id in active_chat_ids
+            if chat_id in self._stores
+        ]

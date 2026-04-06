@@ -2,14 +2,19 @@ import logging
 import time
 
 import asyncio
+from collections.abc import AsyncIterator
 
 
 from app.db.session import db
 from app.core.config import settings
-from app.parsers.site import ALL_SCRAPERS
+from app.core.apartment import Apartment
+from app.parsers.site import InBerlinWohnenScraper
 from app.db.services import ListingService
 from app.telegram.handlers import UserRegistry
 from app.telegram.notifier import TelegramNotifier
+from app.telegram.handlers.handlers import FilterStore
+
+ActiveUsers = list[tuple[str, FilterStore]]
 
 logger = logging.getLogger(__name__)
 
@@ -20,80 +25,124 @@ class ScraperEngine:
         self.registry = registry
         self._known_site_ids: set[str] = set()
 
+    async def _load_user_histories(
+        self, svc: ListingService, chat_ids: list[str]
+    ) -> dict[str, set[str]]:
+        if getattr(type(svc), "preload_user_histories", None) is not None:
+            return await svc.preload_user_histories(chat_ids)
+
+        histories: dict[str, set[str]] = {}
+        for chat_id in chat_ids:
+            histories[chat_id] = await svc.get_user_history(chat_id)
+        return histories
+
+    async def _iter_scraper_apartments(self, scraper: InBerlinWohnenScraper) -> AsyncIterator[Apartment]:
+        if getattr(type(scraper), "iter_listings", None) is not None:
+            async for apartment in scraper.iter_listings():
+                yield apartment
+            return
+
+        for apartment in await scraper.fetch_all():
+            yield apartment
+
+    async def _process_apartment_for_users(
+        self,
+        apartment: Apartment,
+        active_users: ActiveUsers,
+        user_histories: dict[str, set[str]],
+        svc: ListingService,
+    ) -> int:
+        total_notified = 0
+
+        for chat_id, store in active_users:
+            history = user_histories[chat_id]
+            if store.is_paused or apartment.id in history:
+                continue
+            if not apartment.matches(
+                store.current_filter,
+                show_special_listings=store.show_special_listings,
+            ):
+                continue
+
+            outcome = await svc.process_apartment(
+                apartment,
+                store.current_filter,
+                chat_id,
+                self.notifier,
+                lang=store.lang,
+                with_actions=False,
+                show_special_listings=store.show_special_listings,
+            )
+            if not outcome.notified:
+                continue
+
+            total_notified += 1
+            await asyncio.sleep(settings.NOTIFICATION_DELAY)
+
+        return total_notified
+
+    async def _run_scraper(
+        self,
+        scraper: InBerlinWohnenScraper,
+        active_users: ActiveUsers,
+        user_histories: dict[str, set[str]],
+        previous_site_ids: set[str],
+        current_site_ids: set[str],
+        svc: ListingService,
+    ) -> int:
+        processed_count = 0
+        total_notified = 0
+
+        try:
+            async for apartment in self._iter_scraper_apartments(scraper):
+                processed_count += 1
+                current_site_ids.add(apartment.id)
+
+                if apartment.id in previous_site_ids:
+                    continue
+
+                total_notified += await self._process_apartment_for_users(
+                    apartment,
+                    active_users,
+                    user_histories,
+                    svc,
+                )
+        except Exception as exc:
+            logger.error("[%s] fetch error: %s", scraper.slug, exc)
+        finally:
+            await scraper.close_session()
+
+        logger.info(
+            "[%s] cycle done: processed %d apartments",
+            scraper.slug,
+            processed_count,
+        )
+        return total_notified
+
     async def run_cycle(self) -> int:
-        active_users = await self.registry.fetch_all_active()
+        active_users: ActiveUsers = await self.registry.fetch_all_active()
         if not active_users:
             return 0
 
-        user_histories: dict[str, set[str]] = {}
+        svc = ListingService()
+        chat_ids = [chat_id for chat_id, _ in active_users]
         async with db.session_context():
-            svc = ListingService()
-            for chat_id, _ in active_users:
-                user_histories[chat_id] = await svc.get_user_history(chat_id)
+            user_histories = await self._load_user_histories(svc, chat_ids)
 
-        scrapers = [cls() for cls in ALL_SCRAPERS]
+        scrapers = [InBerlinWohnenScraper()]
         previous_site_ids = set(self._known_site_ids)
         current_site_ids: set[str] = set()
         total_notified = 0
 
         async with db.session_context():
-            svc = ListingService()
             for scraper in scrapers:
-                processed_count = 0
-                try:
-                    iterator = (
-                        scraper.iter_listings()
-                        if getattr(type(scraper), "iter_listings", None) is not None
-                        else None
-                    )
-                    if iterator is None:
-                        apartments = await scraper.fetch_all()
-
-                        async def _fallback_iterator():
-                            for apartment in apartments:
-                                yield apartment
-
-                        iterator = _fallback_iterator()
-
-                    async for apt in iterator:
-                        processed_count += 1
-                        current_site_ids.add(apt.id)
-
-                        if apt.id in previous_site_ids:
-                            continue
-
-                        for chat_id, store in active_users:
-                            if store.is_paused or apt.id in user_histories[chat_id]:
-                                continue
-                            if not apt.matches(
-                                store.current_filter,
-                                show_special_listings=store.show_special_listings,
-                            ):
-                                continue
-
-                            outcome = await svc.process_apartment(
-                                apt,
-                                store.current_filter,
-                                chat_id,
-                                self.notifier,
-                                lang=store.lang,
-                                with_actions=False,
-                                show_special_listings=store.show_special_listings,
-                            )
-
-                            if outcome.notified:
-                                user_histories[chat_id].add(apt.id)
-                                total_notified += 1
-                                await asyncio.sleep(settings.NOTIFICATION_DELAY)
-                except Exception as exc:
-                    logger.error("[%s] fetch error: %s", scraper.slug, exc)
-                finally:
-                    await scraper.close_session()
-
-                logger.info(
-                    "[%s] cycle done: processed %d apartments",
-                    scraper.slug,
-                    processed_count,
+                total_notified += await self._run_scraper(
+                    scraper,
+                    active_users,
+                    user_histories,
+                    previous_site_ids,
+                    current_site_ids,
+                    svc,
                 )
 
         self._known_site_ids = current_site_ids

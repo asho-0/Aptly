@@ -4,6 +4,7 @@ from app.core.apartment import ApartmentFilter
 from app.core.enums import SocialStatus
 from app.db.models.models import Filter, User
 from app.db.repositories.user_repo import UserRepository
+from app.db.schemas.user_scm import UserProfileSchema
 
 
 class UserService:
@@ -61,13 +62,13 @@ class UserService:
             user.show_special_listings = enabled
 
     async def save_profile(
-        self, chat_id: str, profile_data: dict[str, t.Any]
+        self, chat_id: str, profile_data: UserProfileSchema
     ) -> User | None:
         user = await self.repo.get_by_chat_id(chat_id)
         if user is None:
             return None
 
-        for field_name, value in profile_data.items():
+        for field_name, value in profile_data.model_dump().items():
             setattr(user, field_name, value)
 
         user.full_name = (
@@ -80,45 +81,30 @@ class UserService:
         return await self.repo.get_by_chat_id(chat_id)
 
     @staticmethod
-    def serialize_profile(user: User | None) -> dict[str, t.Any]:
+    def serialize_profile(user: User | None) -> UserProfileSchema:
         if user is None:
-            return {
-                "salutation": "",
-                "first_name": "",
-                "last_name": "",
-                "email": "",
-                "phone": "",
-                "street": "",
-                "house_number": "",
-                "zip_code": "",
-                "city": "",
-                "persons_total": None,
-                "wbs_available": False,
-                "wbs_date": "",
-                "wbs_rooms": None,
-                "wbs_income": None,
-            }
+            return UserProfileSchema()
 
-        return {
-            "salutation": user.salutation or "",
-            "first_name": user.first_name or "",
-            "last_name": user.last_name or "",
-            "email": user.email or "",
-            "phone": user.phone or "",
-            "street": user.street or "",
-            "house_number": user.house_number or "",
-            "zip_code": user.zip_code or "",
-            "city": user.city or "",
-            "persons_total": user.persons_total,
-            "wbs_available": bool(user.wbs_available),
-            "wbs_date": user.wbs_date or "",
-            "wbs_rooms": user.wbs_rooms,
-            "wbs_income": user.wbs_income,
-        }
+        return UserProfileSchema(
+            salutation=user.salutation or "",
+            first_name=user.first_name or "",
+            last_name=user.last_name or "",
+            email=user.email or "",
+            phone=user.phone or "",
+            street=user.street or "",
+            house_number=user.house_number or "",
+            zip_code=user.zip_code or "",
+            city=user.city or "",
+            persons_total=user.persons_total,
+            wbs_available=bool(user.wbs_available),
+            wbs_date=user.wbs_date or "",
+            wbs_rooms=user.wbs_rooms,
+            wbs_income=user.wbs_income,
+        )
 
     @staticmethod
-    def is_profile_complete(data: dict[str, t.Any]) -> bool:
-        if data.get("salutation") not in {"Herr", "Frau"}:
+    def is_profile_complete(data: UserProfileSchema) -> bool:
+        if data.salutation not in {"Herr", "Frau"}:
             return False
         for field_name in (
             "first_name",
@@ -131,17 +117,17 @@ class UserService:
             "city",
             "wbs_date",
         ):
-            if not str(data.get(field_name, "")).strip():
+            if not str(getattr(data, field_name, "")).strip():
                 return False
-        persons_total = data.get("persons_total")
+        persons_total = data.persons_total
         if not isinstance(persons_total, int) or persons_total < 1:
             return False
-        wbs_rooms = data.get("wbs_rooms")
+        wbs_rooms = data.wbs_rooms
         if not isinstance(wbs_rooms, int) or wbs_rooms < 1 or wbs_rooms > 7:
             return False
-        if data.get("wbs_income") not in {100, 140, 160, 180, 220}:
+        if data.wbs_income not in {100, 140, 160, 180, 220}:
             return False
-        return isinstance(data.get("wbs_available"), bool)
+        return isinstance(data.wbs_available, bool)
 
     @staticmethod
     def convert_to_domain(db_filter: Filter) -> ApartmentFilter:

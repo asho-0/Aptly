@@ -44,7 +44,7 @@ class TestRunCycleKnownIds:
 
         mock_svc = AsyncMock()
 
-        with patch("app.scrape_engine.ALL_SCRAPERS", [lambda: mock_scraper]):
+        with patch("app.scrape_engine.InBerlinWohnenScraper", lambda: mock_scraper):
             with patch("app.scrape_engine.db") as mock_db:
                 mock_db.session_context.return_value.__aenter__ = AsyncMock(
                     return_value=None
@@ -76,7 +76,7 @@ class TestRunCycleKnownIds:
         mock_svc.get_user_history.return_value = set()
         mock_svc.process_apartment.return_value = MagicMock(notified=False)
 
-        with patch("app.scrape_engine.ALL_SCRAPERS", [lambda: mock_scraper]):
+        with patch("app.scrape_engine.InBerlinWohnenScraper", lambda: mock_scraper):
             with patch("app.scrape_engine.db") as mock_db:
                 mock_db.session_context.return_value.__aenter__ = AsyncMock(
                     return_value=None
@@ -106,7 +106,7 @@ class TestRunCycleNotifications:
         mock_svc = AsyncMock()
         mock_svc.get_user_history.return_value = set()
 
-        with patch("app.scrape_engine.ALL_SCRAPERS", [lambda: mock_scraper]):
+        with patch("app.scrape_engine.InBerlinWohnenScraper", lambda: mock_scraper):
             with patch("app.scrape_engine.db") as mock_db:
                 mock_db.session_context.return_value.__aenter__ = AsyncMock(
                     return_value=None
@@ -134,7 +134,7 @@ class TestRunCycleNotifications:
         mock_svc = AsyncMock()
         mock_svc.get_user_history.return_value = {"degewo:99"}  # уже уведомлён
 
-        with patch("app.scrape_engine.ALL_SCRAPERS", [lambda: mock_scraper]):
+        with patch("app.scrape_engine.InBerlinWohnenScraper", lambda: mock_scraper):
             with patch("app.scrape_engine.db") as mock_db:
                 mock_db.session_context.return_value.__aenter__ = AsyncMock(
                     return_value=None
@@ -162,7 +162,7 @@ class TestRunCycleNotifications:
         mock_svc = AsyncMock()
         mock_svc.get_user_history.return_value = set()
 
-        with patch("app.scrape_engine.ALL_SCRAPERS", [lambda: mock_scraper]):
+        with patch("app.scrape_engine.InBerlinWohnenScraper", lambda: mock_scraper):
             with patch("app.scrape_engine.db") as mock_db:
                 mock_db.session_context.return_value.__aenter__ = AsyncMock(
                     return_value=None
@@ -194,7 +194,7 @@ class TestRunCycleNotifications:
         mock_svc.get_user_history.return_value = set()
         mock_svc.process_apartment.return_value = outcome
 
-        with patch("app.scrape_engine.ALL_SCRAPERS", [lambda: mock_scraper]):
+        with patch("app.scrape_engine.InBerlinWohnenScraper", lambda: mock_scraper):
             with patch("app.scrape_engine.db") as mock_db:
                 mock_db.session_context.return_value.__aenter__ = AsyncMock(
                     return_value=None
@@ -227,7 +227,7 @@ class TestRunCycleNotifications:
         mock_svc.get_user_history.return_value = set()
         mock_svc.process_apartment.return_value = outcome
 
-        with patch("app.scrape_engine.ALL_SCRAPERS", [lambda: mock_scraper]):
+        with patch("app.scrape_engine.InBerlinWohnenScraper", lambda: mock_scraper):
             with patch("app.scrape_engine.db") as mock_db:
                 mock_db.session_context.return_value.__aenter__ = AsyncMock(
                     return_value=None
@@ -255,7 +255,7 @@ class TestRunCycleNotifications:
         mock_svc = AsyncMock()
         mock_svc.get_user_history.return_value = set()
 
-        with patch("app.scrape_engine.ALL_SCRAPERS", [lambda: mock_scraper]):
+        with patch("app.scrape_engine.InBerlinWohnenScraper", lambda: mock_scraper):
             with patch("app.scrape_engine.db") as mock_db:
                 mock_db.session_context.return_value.__aenter__ = AsyncMock(
                     return_value=None

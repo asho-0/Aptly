@@ -1,9 +1,18 @@
 import typing as t
+from collections import defaultdict
 from datetime import datetime, timezone
 
 from sqlalchemy.sql import Select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy import delete, select, update, func, cast as sa_cast, Numeric
+from sqlalchemy import (
+    Numeric,
+    cast as sa_cast,
+    delete,
+    exists as sa_exists,
+    func,
+    select,
+    update,
+)
 
 from app.db.repositories.base_repo import BaseRepository
 from app.db.models.models import Listing, NotifiedListing
@@ -18,6 +27,7 @@ from app.db.schemas.listing_scm import (
 class ListingRepository(BaseRepository):
     async def upsert(self, request: UpsertListingRequest) -> UpsertListingResponse:
         slug, external_id = request.uid.split(":", 1)
+        now = datetime.now(timezone.utc)
 
         stmt = (
             pg_insert(Listing)
@@ -41,13 +51,13 @@ class ListingRepository(BaseRepository):
                 description=request.description,
                 image_url=request.image_url,
                 published_at=request.published_at,
-                first_seen_at=datetime.now(timezone.utc),
-                last_seen_at=datetime.now(timezone.utc),
+                first_seen_at=now,
+                last_seen_at=now,
             )
             .on_conflict_do_update(
                 index_elements=[Listing.source_slug, Listing.external_id],
                 set_=dict(
-                    last_seen_at=datetime.now(timezone.utc),
+                    last_seen_at=now,
                     active=True,
                     source_name=request.source_name,
                     url=request.url,
@@ -109,11 +119,14 @@ class ListingRepository(BaseRepository):
         ]
 
     async def exists(self, uid: str, chat_id: str) -> bool:
-        query = select(NotifiedListing).where(
-            NotifiedListing.uid == uid, NotifiedListing.chat_id == str(chat_id)
+        query = select(
+            sa_exists().where(
+                NotifiedListing.uid == uid,
+                NotifiedListing.chat_id == str(chat_id),
+            )
         )
         result = await self.session.execute(query)
-        return result.scalar_one_or_none() is not None
+        return bool(result.scalar())
 
     async def get_existing_uid_by_url(self, url: str) -> str | None:
         query = select(Listing.uid).where(Listing.url == url).limit(1)
@@ -158,3 +171,19 @@ class ListingRepository(BaseRepository):
         )
         result = await self.session.execute(query)
         return set(result.scalars().all())
+
+    async def get_user_notified_uids_map(
+        self, chat_ids: t.Sequence[str]
+    ) -> dict[str, set[str]]:
+        if not chat_ids:
+            return {}
+
+        query = select(NotifiedListing.chat_id, NotifiedListing.uid).where(
+            NotifiedListing.chat_id.in_(tuple(str(chat_id) for chat_id in chat_ids))
+        )
+        result = await self.session.execute(query)
+
+        grouped: defaultdict[str, set[str]] = defaultdict(set)
+        for row in result:
+            grouped[str(row.chat_id)].add(str(row.uid))
+        return dict(grouped)

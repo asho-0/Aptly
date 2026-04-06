@@ -1,7 +1,15 @@
+import asyncio
 import hashlib
+from dataclasses import dataclass, field
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
-from playwright.async_api import Browser, BrowserContext, Page, async_playwright
+from playwright.async_api import (
+    Browser,
+    BrowserContext,
+    Page,
+    Playwright,
+    async_playwright,
+)
 
 from app.core.apartment import Apartment
 from app.core.enums import SocialStatus
@@ -429,19 +437,6 @@ def _parse_raw_card(raw_card: dict[str, object], make_id) -> Apartment | None:
     return _fallback_parse_raw_card(raw_card, make_id)
 
 
-async def _get_page(scraper: "InBerlinWohnenScraper") -> Page:
-    if scraper._context is None:
-        scraper._playwright = await async_playwright().start()
-        scraper._browser = await scraper._playwright.chromium.launch(
-            headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
-        )
-        scraper._context = await scraper._browser.new_context(
-            locale="de-DE",
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-        )
-    return await scraper._context.new_page()
-
-
 async def _accept_cookies(page: Page) -> None:
     button = page.locator("#accept-selected-cookies, #accept-all-cookies").first
     if await button.count():
@@ -507,6 +502,103 @@ async def _go_to_next_page(page: Page, current_page: int, base_origin: str) -> b
     return False
 
 
+@dataclass
+class BrowserPagePool:
+    max_idle_pages: int = 2
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _playwright: Playwright | None = field(default=None, init=False, repr=False)
+    _browser: Browser | None = field(default=None, init=False, repr=False)
+    _context: BrowserContext | None = field(default=None, init=False, repr=False)
+    _idle_pages: list[Page] = field(default_factory=list, init=False, repr=False)
+
+    async def _route_resource(self, route) -> None:
+        if route.request.resource_type in {"image", "media", "font"}:
+            await route.abort()
+            return
+        await route.continue_()
+
+    async def _ensure_context_locked(self) -> BrowserContext:
+        if self._context is None:
+            self._playwright = await async_playwright().start()
+            self._browser = await self._playwright.chromium.launch(
+                headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
+            )
+            self._context = await self._browser.new_context(
+                locale="de-DE",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+            )
+            await self._context.route("**/*", self._route_resource)
+
+        return self._context
+
+    async def _reset_page(self, page: Page) -> None:
+        try:
+            await page.goto("about:blank", wait_until="domcontentloaded", timeout=5000)
+        except Exception:
+            pass
+
+    async def acquire_page(self) -> Page:
+        async with self._lock:
+            context = await self._ensure_context_locked()
+
+            while self._idle_pages:
+                page = self._idle_pages.pop()
+                if not page.is_closed():
+                    return page
+
+            return await context.new_page()
+
+    async def release_page(self, page: Page | None) -> None:
+        if page is None or page.is_closed():
+            return
+
+        await self._reset_page(page)
+
+        should_close = False
+        async with self._lock:
+            if len(self._idle_pages) < self.max_idle_pages and not page.is_closed():
+                self._idle_pages.append(page)
+            else:
+                should_close = True
+
+        if should_close and not page.is_closed():
+            await page.close()
+
+    async def warmup(self, page_count: int = 1) -> None:
+        target_pages = max(0, min(page_count, self.max_idle_pages))
+        async with self._lock:
+            context = await self._ensure_context_locked()
+            self._idle_pages = [page for page in self._idle_pages if not page.is_closed()]
+
+            while len(self._idle_pages) < target_pages:
+                self._idle_pages.append(await context.new_page())
+
+    async def close(self) -> None:
+        async with self._lock:
+            idle_pages = self._idle_pages
+            context = self._context
+            browser = self._browser
+            playwright = self._playwright
+
+            self._idle_pages = []
+            self._context = None
+            self._browser = None
+            self._playwright = None
+
+        for page in idle_pages:
+            if not page.is_closed():
+                await page.close()
+        if context is not None:
+            await context.close()
+        if browser is not None:
+            await browser.close()
+        if playwright is not None:
+            await playwright.stop()
+
+
+_BROWSER_POOL = BrowserPagePool()
+
+
 class InBerlinWohnenScraper(BaseScraper):
     slug = "inberlinwohnen"
     name = "inberlinwohnen.de"
@@ -517,15 +609,29 @@ class InBerlinWohnenScraper(BaseScraper):
 
     def __init__(self) -> None:
         super().__init__()
-        self._playwright = None
-        self._browser: Browser | None = None
-        self._context: BrowserContext | None = None
+        self._page: Page | None = None
+
+    @classmethod
+    async def warm_shared_resources(cls) -> None:
+        await _BROWSER_POOL.warmup()
+
+    @classmethod
+    async def close_shared_resources(cls) -> None:
+        await _BROWSER_POOL.close()
 
     def _parse_raw_card(self, raw_card: dict[str, object]) -> Apartment | None:
         return _parse_raw_card(raw_card, self.make_id)
 
+    async def _acquire_page(self) -> Page:
+        self._page = await _BROWSER_POOL.acquire_page()
+        return self._page
+
+    async def _release_page(self) -> None:
+        await _BROWSER_POOL.release_page(self._page)
+        self._page = None
+
     async def iter_listings(self):
-        page = await _get_page(self)
+        page = await self._acquire_page()
         await page.goto(self.base_url, wait_until="domcontentloaded", timeout=60000)
         await _accept_cookies(page)
         await _wait_for_results(page, self.domain)
@@ -567,12 +673,6 @@ class InBerlinWohnenScraper(BaseScraper):
         return apartments
 
     async def close_session(self) -> None:
-        if self._context is not None:
-            await self._context.close()
-            self._context = None
-        if self._browser is not None:
-            await self._browser.close()
-            self._browser = None
-        if self._playwright is not None:
-            await self._playwright.stop()
-            self._playwright = None
+        if self._page is not None:
+            await self._release_page()
+            

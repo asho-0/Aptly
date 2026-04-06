@@ -57,7 +57,7 @@ class ApiServer:
                 "token": pairing.token,
                 "chatId": pairing.chat_id,
                 "chat_id": pairing.chat_id,
-                "profile": self._user_service.serialize_profile(user),
+                "profile": self._user_service.serialize_profile(user).model_dump(),
             }
         )
 

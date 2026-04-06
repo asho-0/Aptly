@@ -146,6 +146,7 @@ class Listing(Base):
     __table_args__ = (
         Index("uq_listing_source_ext", "source_slug", "external_id", unique=True),
         Index("ix_listing_stats", "source_slug", "rooms", "price", "active"),
+        Index("ix_listing_url", "url"),
     )
 
 
