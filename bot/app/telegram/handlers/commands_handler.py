@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import logging
 import time
+from collections.abc import AsyncIterator
 from typing import Any
 
 from aiogram import F, Router
@@ -10,11 +11,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from app.core.config import settings
 from app.core.enums import SocialStatus
+from app.db.models.models import Listing, User
+from app.db.schemas.user_scm import UserProfileSchema
 from app.db.services import FilterService, ListingService, UserService
 from app.db.session import db
-from app.parsers.site import ALL_SCRAPERS
+from app.parsers.site import InBerlinWohnenScraper
 from app.realtime import ExtensionGateway, PairingStore
 from app.telegram.handlers import FilterStore, UserRegistry
 from app.telegram.interface.keyboards import (
@@ -122,43 +124,45 @@ class BotController:
         self._preview_tasks[chat_id] = task
         task.add_done_callback(lambda _: self._preview_tasks.pop(chat_id, None))
 
+    async def _iter_scraper_apartments(self, scraper) -> AsyncIterator[Any]:
+        if getattr(type(scraper), "iter_listings", None) is not None:
+            async for apartment in scraper.iter_listings():
+                yield apartment
+            return
+
+        for apartment in await scraper.fetch_all():
+            yield apartment
+
     async def _run_preview(self, chat_id: str, store: FilterStore) -> None:
         started_at = time.perf_counter()
         found = 0
-        scrapers = [cls() for cls in ALL_SCRAPERS]
+        scrapers = [InBerlinWohnenScraper()]
+        with_actions = False
+
+        if self.registry.extension_gateway:
+            with_actions = await self.registry.extension_gateway.is_connected(chat_id)
 
         try:
-            results = await asyncio.gather(
-                *[scraper.fetch_all() for scraper in scrapers], return_exceptions=True
-            )
-            for scraper, result in zip(scrapers, results):
-                if isinstance(result, BaseException):
-                    logger.error("[%s] preview error: %s", scraper.slug, result)
-                    continue
+            async with db.session_context():
+                if getattr(type(self.listing_svc), "preload_user_histories", None) is not None:
+                    await self.listing_svc.preload_user_histories([chat_id])
 
-                apartments = result
-                if not apartments:
-                    continue
-
-                async with db.session_context():
-                    for apartment in apartments:
-                        sent = await self.listing_svc.preview_apartment(
-                            apartment,
-                            store.current_filter,
-                            self.notifier,
-                            int(chat_id),
-                            lang=store.lang,
-                            with_actions=bool(
-                                self.registry.extension_gateway
-                                and await self.registry.extension_gateway.is_connected(
-                                    chat_id
-                                )
-                            ),
-                            show_special_listings=store.show_special_listings,
-                        )
-                        if sent:
-                            found += 1
-                            await asyncio.sleep(settings.NOTIFICATION_DELAY)
+                for scraper in scrapers:
+                    try:
+                        async for apartment in self._iter_scraper_apartments(scraper):
+                            sent = await self.listing_svc.preview_apartment(
+                                apartment,
+                                store.current_filter,
+                                self.notifier,
+                                int(chat_id),
+                                lang=store.lang,
+                                with_actions=with_actions,
+                                show_special_listings=store.show_special_listings,
+                            )
+                            if sent:
+                                found += 1
+                    except Exception as exc:
+                        logger.error("[%s] preview error: %s", scraper.slug, exc)
         finally:
             for scraper in scrapers:
                 await scraper.close_session()
@@ -180,6 +184,10 @@ class CallbackHandlers:
     def __init__(self, controller: BotController):
         self.ctrl = controller
 
+    @staticmethod
+    def _chat_id_from_message(message: Message) -> str:
+        return str(message.chat.id)
+
     async def _get_store(
         self,
         chat_id: str,
@@ -188,32 +196,211 @@ class CallbackHandlers:
     ) -> FilterStore:
         return await self.ctrl.registry.get_or_create(chat_id, username, full_name)
 
-    def _profile_summary(self, profile: Any, lang: str) -> str:
+    async def _get_callback_context(
+        self, callback: CallbackQuery
+    ) -> tuple[Message, FilterStore]:
+        message = _require_message(callback)
+        store = await self._get_store(self._chat_id_from_message(message))
+        return message, store
+
+    async def _answer_invalid_value(
+        self, callback: CallbackQuery, lang: str
+    ) -> None:
+        await callback.answer(
+            self.ctrl.translate("invalid_value", lang=lang), show_alert=True
+        )
+
+    async def _open_menu_screen(
+        self,
+        callback: CallbackQuery,
+        text: str,
+        reply_markup,
+    ) -> None:
+        message = _require_message(callback)
+        await message.edit_text(text, reply_markup=reply_markup)
+        await callback.answer()
+
+    async def _show_choice_screen(
+        self,
+        callback: CallbackQuery,
+        text_key: str,
+        reply_markup,
+    ) -> None:
+        _, store = await self._get_callback_context(callback)
+        await self._open_menu_screen(
+            callback,
+            self.ctrl.translate(text_key, lang=store.lang),
+            reply_markup,
+        )
+
+    async def _show_filter_menu(
+        self,
+        callback: CallbackQuery,
+        store: FilterStore,
+        intro_text: str | None = None,
+        lang: str | None = None,
+        summary_first: bool = False,
+        answer_callback: bool = True,
+    ) -> None:
+        resolved_lang = lang or store.lang
+        summary = store.current_filter.summary(
+            resolved_lang, store.show_special_listings
+        )
+        parts = [part for part in [intro_text, summary] if part]
+        if summary_first:
+            parts = [part for part in [summary, intro_text] if part]
+
+        message = _require_message(callback)
+        await message.edit_text("\n\n".join(parts), reply_markup=main_menu_keyboard())
+        if answer_callback:
+            await callback.answer()
+
+    async def _answer_alert(
+        self, callback: CallbackQuery, text_key: str, lang: str
+    ) -> None:
+        await callback.answer(self.ctrl.translate(text_key, lang=lang), show_alert=True)
+
+    async def _load_fill_submit_data(
+        self, chat_id: str, listing_id: int
+    ) -> tuple[User | None, Listing | None]:
+        async with db.session_context():
+            profile = await self.ctrl.user_svc.get_profile(chat_id)
+            listing = await self.ctrl.listing_svc.get_listing_by_id(listing_id)
+        return profile, listing
+
+    async def _validate_fill_submit(
+        self,
+        callback: CallbackQuery,
+        store: FilterStore,
+        chat_id: str,
+        listing: Listing | None,
+        serialized_profile: UserProfileSchema,
+    ) -> bool:
+        if listing is None:
+            await self._answer_alert(callback, "listing_missing", store.lang)
+            return False
+
+        if not self.ctrl.user_svc.is_profile_complete(serialized_profile):
+            await self._answer_alert(callback, "profile_incomplete", store.lang)
+            return False
+
+        if not await self.ctrl.extension_gateway.is_connected(chat_id):
+            await self._answer_alert(callback, "extension_unavailable", store.lang)
+            return False
+
+        return True
+
+    async def _apply_preset_value(
+        self,
+        callback: CallbackQuery,
+        field: str,
+        cast_type: type,
+    ) -> None:
+        message = _require_message(callback)
+        _, low, high = str(callback.data).split("_")
+        await self._finish_preset(
+            callback,
+            await self._apply_range(
+                self._chat_id_from_message(message), field, low, high, cast_type
+            ),
+        )
+
+    @staticmethod
+    def _profile_save_payload(payload: dict[str, Any]) -> UserProfileSchema:
+        return UserProfileSchema(
+            salutation=payload["salutation"],
+            first_name=payload["first_name"],
+            last_name=payload["last_name"],
+            email=payload["email"],
+            phone=payload["phone"],
+            street=payload["street"],
+            house_number=payload["house_number"],
+            zip_code=payload["zip_code"],
+            city=payload["city"],
+            persons_total=payload["persons_total"],
+            wbs_available=payload["wbs_available"],
+            wbs_date=payload["wbs_date"],
+            wbs_rooms=payload["wbs_rooms"],
+            wbs_income=payload["wbs_income"],
+        )
+
+    @staticmethod
+    def _profile_prompt_keyboard(field_name: str):
+        if field_name == "salutation":
+            return profile_salutation_keyboard()
+        if field_name == "wbs_available":
+            return profile_wbs_available_keyboard()
+        if field_name == "wbs_income":
+            return profile_income_keyboard()
+        return None
+
+    async def _parse_profile_text_value(
+        self, field_name: str, text: str, lang: str
+    ) -> tuple[bool, Any, str | None]:
+        if field_name not in {"persons_total", "wbs_rooms", "wbs_date"}:
+            return True, text, None
+
+        if field_name == "wbs_date":
+            try:
+                datetime.datetime.strptime(text, "%d.%m.%Y")
+            except ValueError:
+                return False, None, self.ctrl.translate("profile_invalid_date", lang=lang)
+            return True, text, None
+
+        if not text.isdigit():
+            return False, None, self.ctrl.translate("profile_invalid_number", lang=lang)
+
+        value = int(text)
+        if field_name == "persons_total" and value < 1:
+            return False, None, self.ctrl.translate("profile_invalid_number", lang=lang)
+        if field_name == "wbs_rooms" and not (1 <= value <= 7):
+            return False, None, self.ctrl.translate("profile_invalid_number", lang=lang)
+        return True, value, None
+
+    async def _handle_profile_choice(
+        self,
+        callback: CallbackQuery,
+        state: FSMContext,
+        expected_state: State,
+        field_name: str,
+        value: Any,
+    ) -> None:
+        state_name = await state.get_state()
+        message, store = await self._get_callback_context(callback)
+        if state_name != expected_state.state:
+            await self._answer_invalid_value(callback, store.lang)
+            return
+
+        await state.update_data(**{field_name: value})
+        await callback.answer()
+        await self._advance_profile(message, state, store.lang)
+
+    def _profile_summary(self, profile: User | None, lang: str) -> str:
         data = self.ctrl.user_svc.serialize_profile(profile)
         summary = self.ctrl.translate(
             "profile_current",
             lang=lang,
-            salutation=data["salutation"] or "—",
-            first_name=data["first_name"] or "—",
-            last_name=data["last_name"] or "—",
-            email=data["email"] or "—",
-            phone=data["phone"] or "—",
-            street=data["street"] or "—",
-            house_number=data["house_number"] or "—",
-            zip_code=data["zip_code"] or "—",
-            city=data["city"] or "—",
+            salutation=data.salutation or "—",
+            first_name=data.first_name or "—",
+            last_name=data.last_name or "—",
+            email=data.email or "—",
+            phone=data.phone or "—",
+            street=data.street or "—",
+            house_number=data.house_number or "—",
+            zip_code=data.zip_code or "—",
+            city=data.city or "—",
             persons_total=(
-                data["persons_total"] if data["persons_total"] is not None else "—"
+                data.persons_total if data.persons_total is not None else "—"
             ),
-            wbs_available="Ja" if data["wbs_available"] else "Nein",
-            wbs_date=data["wbs_date"] or "—",
-            wbs_rooms=data["wbs_rooms"] if data["wbs_rooms"] is not None else "—",
-            wbs_income=data["wbs_income"] if data["wbs_income"] is not None else "—",
+            wbs_available="Ja" if data.wbs_available else "Nein",
+            wbs_date=data.wbs_date or "—",
+            wbs_rooms=data.wbs_rooms if data.wbs_rooms is not None else "—",
+            wbs_income=data.wbs_income if data.wbs_income is not None else "—",
         )
         return f"{self.ctrl.translate('profile_menu_title', lang=lang)}\n\n{summary}"
 
     async def _show_profile_menu(
-        self, target: Message, lang: str, profile: Any, edit: bool
+        self, target: Message, lang: str, profile: User | None, edit: bool
     ) -> None:
         text = self._profile_summary(profile, lang)
         if edit:
@@ -225,15 +412,9 @@ class CallbackHandlers:
         self, target: Message, state_name: str, lang: str
     ) -> None:
         field_name, _, _, prompt_key = PROFILE_FIELDS[PROFILE_INDEX[state_name]]
-        reply_markup = None
-        if field_name == "salutation":
-            reply_markup = profile_salutation_keyboard()
-        elif field_name == "wbs_available":
-            reply_markup = profile_wbs_available_keyboard()
-        elif field_name == "wbs_income":
-            reply_markup = profile_income_keyboard()
         await target.answer(
-            self.ctrl.translate(prompt_key, lang=lang), reply_markup=reply_markup
+            self.ctrl.translate(prompt_key, lang=lang),
+            reply_markup=self._profile_prompt_keyboard(field_name),
         )
 
     async def _advance_profile(
@@ -250,28 +431,13 @@ class CallbackHandlers:
             async with db.session_context():
                 profile = await self.ctrl.user_svc.save_profile(
                     str(message.chat.id),
-                    {
-                        "salutation": payload["salutation"],
-                        "first_name": payload["first_name"],
-                        "last_name": payload["last_name"],
-                        "email": payload["email"],
-                        "phone": payload["phone"],
-                        "street": payload["street"],
-                        "house_number": payload["house_number"],
-                        "zip_code": payload["zip_code"],
-                        "city": payload["city"],
-                        "persons_total": payload["persons_total"],
-                        "wbs_available": payload["wbs_available"],
-                        "wbs_date": payload["wbs_date"],
-                        "wbs_rooms": payload["wbs_rooms"],
-                        "wbs_income": payload["wbs_income"],
-                    },
+                    self._profile_save_payload(payload),
                 )
             await state.clear()
             if profile is not None:
                 await self.ctrl.extension_gateway.push_profile(
                     str(message.chat.id),
-                    self.ctrl.user_svc.serialize_profile(profile),
+                    self.ctrl.user_svc.serialize_profile(profile).model_dump(),
                 )
             await message.answer(self.ctrl.translate("profile_saved", lang=lang))
             await self._show_profile_menu(message, lang, profile, edit=False)
@@ -282,12 +448,9 @@ class CallbackHandlers:
         await self._send_profile_prompt(message, next_state.state or "", lang)
 
     async def _finish_preset(self, callback: CallbackQuery, ok: bool) -> None:
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
+        message, store = await self._get_callback_context(callback)
         if not ok:
-            await callback.answer(
-                self.ctrl.translate("invalid_value", lang=store.lang), show_alert=True
-            )
+            await self._answer_invalid_value(callback, store.lang)
             return
 
         summary = store.current_filter.summary(store.lang, store.show_special_listings)
@@ -319,7 +482,7 @@ class CallbackHandlers:
     async def show_menu(self, message: Message) -> None:
         user = message.from_user
         store = await self._get_store(
-            str(message.chat.id),
+            self._chat_id_from_message(message),
             getattr(user, "username", None),
             getattr(user, "full_name", None),
         )
@@ -336,17 +499,15 @@ class CallbackHandlers:
             )
 
     async def start_profile(self, callback: CallbackQuery, state: FSMContext) -> None:
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
+        message, store = await self._get_callback_context(callback)
         async with db.session_context():
-            profile = await self.ctrl.user_svc.get_profile(str(message.chat.id))
+            profile = await self.ctrl.user_svc.get_profile(self._chat_id_from_message(message))
         await state.clear()
         await self._show_profile_menu(message, store.lang, profile, edit=True)
         await callback.answer()
 
     async def cb_profile_edit(self, callback: CallbackQuery, state: FSMContext) -> None:
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
+        message, store = await self._get_callback_context(callback)
         await state.clear()
         await state.set_state(ProfileStates.salutation)
         await message.answer(self.ctrl.translate("profile_intro", lang=store.lang))
@@ -356,14 +517,13 @@ class CallbackHandlers:
         await callback.answer()
 
     async def cb_profile_save(self, callback: CallbackQuery) -> None:
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
+        message, store = await self._get_callback_context(callback)
         async with db.session_context():
-            profile = await self.ctrl.user_svc.get_profile(str(message.chat.id))
+            profile = await self.ctrl.user_svc.get_profile(self._chat_id_from_message(message))
         if profile is not None:
             await self.ctrl.extension_gateway.push_profile(
-                str(message.chat.id),
-                self.ctrl.user_svc.serialize_profile(profile),
+                self._chat_id_from_message(message),
+                self.ctrl.user_svc.serialize_profile(profile).model_dump(),
             )
         await callback.answer(
             self.ctrl.translate("profile_synced", lang=store.lang), show_alert=True
@@ -374,7 +534,7 @@ class CallbackHandlers:
         if state_name is None:
             return
 
-        store = await self._get_store(str(message.chat.id))
+        store = await self._get_store(self._chat_id_from_message(message))
         text = (message.text or "").strip()
         if not text:
             await message.answer(
@@ -383,33 +543,12 @@ class CallbackHandlers:
             return
 
         current_field = PROFILE_FIELDS[PROFILE_INDEX[state_name]][0]
-        value: Any = text
-        if current_field in {"persons_total", "wbs_rooms"}:
-            if not text.isdigit():
-                await message.answer(
-                    self.ctrl.translate("profile_invalid_number", lang=store.lang)
-                )
-                return
-            value = int(text)
-            if current_field == "persons_total" and value < 1:
-                await message.answer(
-                    self.ctrl.translate("profile_invalid_number", lang=store.lang)
-                )
-                return
-            if current_field == "wbs_rooms" and (value < 1 or value > 7):
-                await message.answer(
-                    self.ctrl.translate("profile_invalid_number", lang=store.lang)
-                )
-                return
-        elif current_field == "wbs_date":
-            try:
-                datetime.datetime.strptime(text, "%d.%m.%Y")
-            except ValueError:
-                await message.answer(
-                    self.ctrl.translate("profile_invalid_date", lang=store.lang)
-                )
-                return
-            value = text
+        ok, value, error_text = await self._parse_profile_text_value(
+            current_field, text, store.lang
+        )
+        if not ok:
+            await message.answer(error_text or "")
+            return
 
         await state.update_data(**{current_field: value})
         await self._advance_profile(message, state, store.lang)
@@ -417,223 +556,149 @@ class CallbackHandlers:
     async def handle_profile_salutation(
         self, callback: CallbackQuery, state: FSMContext
     ) -> None:
-        state_name = await state.get_state()
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
-        if state_name != ProfileStates.salutation.state:
-            await callback.answer(
-                self.ctrl.translate("invalid_value", lang=store.lang), show_alert=True
-            )
-            return
-        value = str(callback.data or "").split(":", 1)[1]
-        await state.update_data(salutation=value)
-        await callback.answer()
-        await self._advance_profile(message, state, store.lang)
+        await self._handle_profile_choice(
+            callback,
+            state,
+            ProfileStates.salutation,
+            "salutation",
+            str(callback.data or "").split(":", 1)[1],
+        )
 
     async def handle_profile_income(
         self, callback: CallbackQuery, state: FSMContext
     ) -> None:
-        state_name = await state.get_state()
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
-        if state_name != ProfileStates.wbs_income.state:
-            await callback.answer(
-                self.ctrl.translate("invalid_value", lang=store.lang), show_alert=True
-            )
-            return
-        value = int(str(callback.data or "").split(":", 1)[1])
-        await state.update_data(wbs_income=value)
-        await callback.answer()
-        await self._advance_profile(message, state, store.lang)
+        await self._handle_profile_choice(
+            callback,
+            state,
+            ProfileStates.wbs_income,
+            "wbs_income",
+            int(str(callback.data or "").split(":", 1)[1]),
+        )
 
     async def handle_profile_wbs_available(
         self, callback: CallbackQuery, state: FSMContext
     ) -> None:
-        state_name = await state.get_state()
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
-        if state_name != ProfileStates.wbs_available.state:
-            await callback.answer(
-                self.ctrl.translate("invalid_value", lang=store.lang), show_alert=True
-            )
-            return
-        value = str(callback.data or "").split(":", 1)[1] == "true"
-        await state.update_data(wbs_available=value)
-        await callback.answer()
-        await self._advance_profile(message, state, store.lang)
+        await self._handle_profile_choice(
+            callback,
+            state,
+            ProfileStates.wbs_available,
+            "wbs_available",
+            str(callback.data or "").split(":", 1)[1] == "true",
+        )
 
     async def cb_back_menu(self, callback: CallbackQuery) -> None:
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
-        await message.edit_text(
+        message, store = await self._get_callback_context(callback)
+        await self._open_menu_screen(
+            callback,
             f"{store.current_filter.summary(store.lang, store.show_special_listings)}\n\n{self.ctrl.translate('menu_title', lang=store.lang)}",
-            reply_markup=main_menu_keyboard(),
+            main_menu_keyboard(),
         )
-        await callback.answer()
 
     async def cb_menu_rooms(self, callback: CallbackQuery) -> None:
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
-        await message.edit_text(
-            self.ctrl.translate("choose_rooms", lang=store.lang),
-            reply_markup=rooms_keyboard(),
-        )
-        await callback.answer()
+        await self._show_choice_screen(callback, "choose_rooms", rooms_keyboard())
 
     async def cb_menu_price(self, callback: CallbackQuery) -> None:
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
-        await message.edit_text(
-            self.ctrl.translate("choose_price", lang=store.lang),
-            reply_markup=price_keyboard(),
-        )
-        await callback.answer()
+        await self._show_choice_screen(callback, "choose_price", price_keyboard())
 
     async def cb_menu_area(self, callback: CallbackQuery) -> None:
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
-        await message.edit_text(
-            self.ctrl.translate("choose_area", lang=store.lang),
-            reply_markup=area_keyboard(),
-        )
-        await callback.answer()
+        await self._show_choice_screen(callback, "choose_area", area_keyboard())
 
     async def cb_menu_status(self, callback: CallbackQuery) -> None:
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
-        await message.edit_text(
-            self.ctrl.translate("choose_status", lang=store.lang),
-            reply_markup=status_keyboard(),
-        )
-        await callback.answer()
+        await self._show_choice_screen(callback, "choose_status", status_keyboard())
 
     async def cb_menu_special_content(self, callback: CallbackQuery) -> None:
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
-        await message.edit_text(
-            self.ctrl.translate("choose_special_content", lang=store.lang),
-            reply_markup=special_content_keyboard(),
+        await self._show_choice_screen(
+            callback, "choose_special_content", special_content_keyboard()
         )
-        await callback.answer()
 
     async def cb_rooms_preset(self, callback: CallbackQuery) -> None:
-        message = _require_message(callback)
-        _, low, high = str(callback.data).split("_")
-        await self._finish_preset(
-            callback,
-            await self._apply_range(str(message.chat.id), "rooms", low, high, int),
-        )
+        await self._apply_preset_value(callback, "rooms", int)
 
     async def cb_price_preset(self, callback: CallbackQuery) -> None:
-        message = _require_message(callback)
-        _, low, high = str(callback.data).split("_")
-        await self._finish_preset(
-            callback,
-            await self._apply_range(str(message.chat.id), "price", low, high, float),
-        )
+        await self._apply_preset_value(callback, "price", float)
 
     async def cb_area_preset(self, callback: CallbackQuery) -> None:
-        message = _require_message(callback)
-        _, low, high = str(callback.data).split("_")
-        await self._finish_preset(
-            callback,
-            await self._apply_range(str(message.chat.id), "area", low, high, float),
-        )
+        await self._apply_preset_value(callback, "area", float)
 
     async def cb_status_value(self, callback: CallbackQuery) -> None:
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
+        message, store = await self._get_callback_context(callback)
         raw = str(callback.data).split("_", 1)[1]
         try:
             status = SocialStatus(raw)
         except ValueError:
-            await callback.answer(
-                self.ctrl.translate("status_options", lang=store.lang), show_alert=True
-            )
+            await self._answer_alert(callback, "status_options", store.lang)
             return
 
         async with db.session_context():
             ok = await self.ctrl.filter_svc.apply_status_update(
                 store.current_filter,
-                str(message.chat.id),
+                self._chat_id_from_message(message),
                 status,
                 lang=store.lang,
             )
         await self._finish_preset(callback, ok)
 
     async def cb_show_filter(self, callback: CallbackQuery) -> None:
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
-        await message.edit_text(
-            store.current_filter.summary(store.lang, store.show_special_listings),
-            reply_markup=main_menu_keyboard(),
-        )
-        await callback.answer()
+        _, store = await self._get_callback_context(callback)
+        await self._show_filter_menu(callback, store)
 
     async def cb_reset(self, callback: CallbackQuery) -> None:
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
+        message, store = await self._get_callback_context(callback)
         store.reset_to_defaults()
         async with db.session_context():
-            await self.ctrl.listing_svc.reset_user_history(str(message.chat.id))
-        await message.edit_text(
-            f"{self.ctrl.translate('reset_done', lang=store.lang)}\n\n{store.current_filter.summary(store.lang, store.show_special_listings)}",
-            reply_markup=main_menu_keyboard(),
+            await self.ctrl.listing_svc.reset_user_history(
+                self._chat_id_from_message(message)
+            )
+        await self._show_filter_menu(
+            callback,
+            store,
+            intro_text=self.ctrl.translate("reset_done", lang=store.lang),
         )
-        await callback.answer()
 
     async def cb_pause(self, callback: CallbackQuery) -> None:
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
+        _, store = await self._get_callback_context(callback)
         store.set_paused(True)
-        await callback.answer(
-            self.ctrl.translate("paused", lang=store.lang), show_alert=True
-        )
+        await self._answer_alert(callback, "paused", store.lang)
 
     async def cb_resume(self, callback: CallbackQuery) -> None:
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
+        message, store = await self._get_callback_context(callback)
         store.set_paused(False)
         if not store.current_filter.is_complete():
-            await callback.answer(
-                self.ctrl.translate("filter_incomplete", lang=store.lang),
-                show_alert=True,
-            )
+            await self._answer_alert(callback, "filter_incomplete", store.lang)
             return
-        self.ctrl.start_preview(str(message.chat.id), store)
-        await callback.answer(
-            self.ctrl.translate("resumed", lang=store.lang), show_alert=True
-        )
+        self.ctrl.start_preview(self._chat_id_from_message(message), store)
+        await self._answer_alert(callback, "resumed", store.lang)
 
     async def cb_lang(self, callback: CallbackQuery) -> None:
-        message = _require_message(callback)
+        _, store = await self._get_callback_context(callback)
         new_lang = str(callback.data).split("_", 1)[1]
-        store = await self._get_store(str(message.chat.id))
         store.set_lang(new_lang)
-        await message.edit_text(
-            f"{store.current_filter.summary(new_lang, store.show_special_listings)}\n\n{self.ctrl.translate('menu_title', lang=new_lang)}",
-            reply_markup=main_menu_keyboard(),
+        await self._show_filter_menu(
+            callback,
+            store,
+            intro_text=self.ctrl.translate("menu_title", lang=new_lang),
+            lang=new_lang,
+            summary_first=True,
+            answer_callback=False,
         )
-        await callback.answer(
-            self.ctrl.translate("lang_changed", lang=new_lang), show_alert=True
-        )
+        await self._answer_alert(callback, "lang_changed", new_lang)
 
     async def cb_special_content(self, callback: CallbackQuery) -> None:
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
+        _, store = await self._get_callback_context(callback)
         enabled = str(callback.data).endswith(":on")
         store.set_show_special_listings(enabled)
-        await message.edit_text(
-            f"{self.ctrl.translate('special_content_enabled' if enabled else 'special_content_disabled', lang=store.lang)}\n\n"
-            f"{store.current_filter.summary(store.lang, store.show_special_listings)}",
-            reply_markup=main_menu_keyboard(),
+        text_key = (
+            "special_content_enabled" if enabled else "special_content_disabled"
         )
-        await callback.answer()
+        await self._show_filter_menu(
+            callback,
+            store,
+            intro_text=self.ctrl.translate(text_key, lang=store.lang),
+        )
 
     async def cb_link_extension(self, callback: CallbackQuery) -> None:
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
-        pin = await self.ctrl.pairing_store.create_pin(str(message.chat.id))
+        message, store = await self._get_callback_context(callback)
+        pin = await self.ctrl.pairing_store.create_pin(self._chat_id_from_message(message))
         await message.answer(
             self.ctrl.translate("pairing_pin", lang=store.lang, pin=pin),
             parse_mode="HTML",
@@ -648,33 +713,19 @@ class CallbackHandlers:
         await callback.answer()
 
     async def cb_fill_submit(self, callback: CallbackQuery) -> None:
-        message = _require_message(callback)
-        store = await self._get_store(str(message.chat.id))
+        message, store = await self._get_callback_context(callback)
+        chat_id = self._chat_id_from_message(message)
         listing_id = int(str(callback.data).split(":", 1)[1])
-
-        async with db.session_context():
-            profile = await self.ctrl.user_svc.get_profile(str(message.chat.id))
-            listing = await self.ctrl.listing_svc.get_listing_by_id(listing_id)
+        profile, listing = await self._load_fill_submit_data(chat_id, listing_id)
 
         serialized_profile = self.ctrl.user_svc.serialize_profile(profile)
-        if listing is None:
-            await callback.answer(
-                self.ctrl.translate("listing_missing", lang=store.lang), show_alert=True
-            )
-            return
-
-        if not self.ctrl.user_svc.is_profile_complete(serialized_profile):
-            await callback.answer(
-                self.ctrl.translate("profile_incomplete", lang=store.lang),
-                show_alert=True,
-            )
-            return
-
-        if not await self.ctrl.extension_gateway.is_connected(str(message.chat.id)):
-            await callback.answer(
-                self.ctrl.translate("extension_unavailable", lang=store.lang),
-                show_alert=True,
-            )
+        if not await self._validate_fill_submit(
+            callback,
+            store,
+            chat_id,
+            listing,
+            serialized_profile,
+        ):
             return
 
         await self.ctrl.notifier.edit_listing_status(
@@ -686,17 +737,14 @@ class CallbackHandlers:
 
         try:
             await self.ctrl.extension_gateway.dispatch_fill(
-                chat_id=str(message.chat.id),
+                chat_id=chat_id,
                 apartment_url=listing.url,
-                user_data=serialized_profile,
+                user_data=serialized_profile.model_dump(),
                 message_id=message.message_id,
                 is_caption_message=bool(message.photo),
             )
         except RuntimeError:
-            await callback.answer(
-                self.ctrl.translate("extension_unavailable", lang=store.lang),
-                show_alert=True,
-            )
+            await self._answer_alert(callback, "extension_unavailable", store.lang)
             return
 
         await callback.answer()

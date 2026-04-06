@@ -103,12 +103,14 @@ class TestPreviewApartment:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_returns_false_if_already_notified(self, listing_svc, notifier):
+    async def test_ignores_notification_history_for_preview(
+        self, listing_svc, notifier
+    ):
         listing_svc.repo.exists.return_value = True
         result = await listing_svc.preview_apartment(
             make_apartment(), make_filter(), notifier, 123
         )
-        assert result is False
+        assert result is True
 
     @pytest.mark.asyncio
     async def test_returns_true_on_successful_send(self, listing_svc, notifier):
@@ -126,10 +128,10 @@ class TestPreviewApartment:
         listing_svc.repo.upsert.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_marks_as_seen_on_success(self, listing_svc, notifier):
+    async def test_does_not_mark_as_seen_on_success(self, listing_svc, notifier):
         apt = make_apartment()
         await listing_svc.preview_apartment(apt, make_filter(), notifier, 123)
-        listing_svc.repo.add_log.assert_called_once_with(apt.id, "123")
+        listing_svc.repo.add_log.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_passes_lang_to_notifier(self, listing_svc, notifier):
@@ -169,3 +171,9 @@ class TestResetUserHistory:
     async def test_calls_repo_delete(self, listing_svc):
         await listing_svc.reset_user_history("123")
         listing_svc.repo.delete_user_notification_history.assert_called_once_with("123")
+
+    @pytest.mark.asyncio
+    async def test_clears_cached_history(self, listing_svc):
+        listing_svc._history_cache["123"] = {"degewo:1"}
+        await listing_svc.reset_user_history("123")
+        assert "123" not in listing_svc._history_cache

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from typing import cast
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 
@@ -34,6 +35,51 @@ class TelegramNotifier:
             self._next_send_at.get(chat_id, 0.0), time.monotonic()
         ) + max(delay_seconds, 0.0)
 
+    def _handle_send_error(
+        self, action_name: str, chat_id: int, exc: TelegramAPIError
+    ) -> None:
+        logger.error("%s to %s failed: %s", action_name, chat_id, exc)
+
+    def _handle_retry_error(
+        self, action_name: str, chat_id: int, exc: TelegramAPIError
+    ) -> None:
+        logger.error("%s to %s failed after retry: %s", action_name, chat_id, exc)
+
+    def _handle_flood_control(
+        self, action_name: str, chat_id: int, retry_after: float
+    ) -> None:
+        logger.warning(
+            "%s to %s hit Telegram flood control, waiting %ss",
+            action_name,
+            chat_id,
+            retry_after,
+        )
+
+    async def _run_action_once(
+        self,
+        action: Callable[[], Awaitable[Message | bool | None]],
+    ) -> Message | bool | None:
+        return await action()
+
+    async def _retry_after_flood_control(
+        self,
+        chat_id: int,
+        action_name: str,
+        action: Callable[[], Awaitable[Message | bool | None]],
+        retry_after: float,
+    ) -> Message | bool | None:
+        self._handle_flood_control(action_name, chat_id, retry_after)
+        self._reserve_chat_slot(chat_id, retry_after)
+        await self._wait_for_chat_slot(chat_id)
+        try:
+            result = await self._run_action_once(action)
+        except TelegramAPIError as exc:
+            self._handle_retry_error(action_name, chat_id, exc)
+            return None
+
+        self._reserve_chat_slot(chat_id, _MIN_CHAT_INTERVAL_SECONDS)
+        return result
+
     async def _run_with_rate_limit(
         self,
         chat_id: int,
@@ -43,34 +89,56 @@ class TelegramNotifier:
         async with self._chat_locks[chat_id]:
             await self._wait_for_chat_slot(chat_id)
             try:
-                result = await action()
-                self._reserve_chat_slot(chat_id, _MIN_CHAT_INTERVAL_SECONDS)
-                return result
+                result = await self._run_action_once(action)
             except TelegramAPIError as exc:
                 retry_after = getattr(exc, "retry_after", 0)
                 if retry_after:
-                    logger.warning(
-                        "%s to %s hit Telegram flood control, waiting %ss",
-                        action_name,
-                        chat_id,
-                        retry_after,
+                    return await self._retry_after_flood_control(
+                        chat_id, action_name, action, float(retry_after)
                     )
-                    self._reserve_chat_slot(chat_id, float(retry_after))
-                    await self._wait_for_chat_slot(chat_id)
-                    try:
-                        result = await action()
-                        self._reserve_chat_slot(chat_id, _MIN_CHAT_INTERVAL_SECONDS)
-                        return result
-                    except TelegramAPIError as retry_exc:
-                        logger.error(
-                            "%s to %s failed after retry: %s",
-                            action_name,
-                            chat_id,
-                            retry_exc,
-                        )
-                        return None
-                logger.error("%s to %s failed: %s", action_name, chat_id, exc)
+                self._handle_send_error(action_name, chat_id, exc)
                 return None
+
+            self._reserve_chat_slot(chat_id, _MIN_CHAT_INTERVAL_SECONDS)
+            return result
+
+    async def _send_photo(
+        self,
+        chat_id: int,
+        image_url: str,
+        caption: str,
+        reply_markup: InlineKeyboardMarkup,
+    ) -> Message | bool | None:
+        return await self._run_with_rate_limit(
+            chat_id,
+            "send_photo",
+            lambda: self._bot.send_photo(
+                chat_id,
+                image_url,
+                caption=caption[:_MAX_CAPTION],
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+            ),
+        )
+
+    async def _send_message(
+        self,
+        chat_id: int,
+        action_name: str,
+        text: str,
+        reply_markup: InlineKeyboardMarkup | None = None,
+    ) -> Message | bool | None:
+        return await self._run_with_rate_limit(
+            chat_id,
+            action_name,
+            lambda: self._bot.send_message(
+                chat_id,
+                text[:_MAX_MESSAGE],
+                parse_mode="HTML",
+                disable_web_page_preview=False,
+                reply_markup=reply_markup,
+            ),
+        )
 
     async def send_apartment(
         self,
@@ -83,16 +151,11 @@ class TelegramNotifier:
         text = apartment.to_telegram_message(lang=lang)
         reply_markup = listing_link_keyboard(apartment.url)
         if apartment.image_url:
-            result = await self._run_with_rate_limit(
+            result = await self._send_photo(
                 chat_id,
-                "send_photo",
-                lambda: self._bot.send_photo(
-                    chat_id,
-                    apartment.image_url,
-                    caption=text[:_MAX_CAPTION],
-                    parse_mode="HTML",
-                    reply_markup=reply_markup,
-                ),
+                apartment.image_url,
+                text,
+                reply_markup,
             )
             if result is not None:
                 return True
@@ -106,30 +169,18 @@ class TelegramNotifier:
         text: str,
         reply_markup: InlineKeyboardMarkup | None = None,
     ) -> Message | None:
-        result = await self._run_with_rate_limit(
+        result = await self._send_message(
             chat_id,
             "send_listing_text",
-            lambda: self._bot.send_message(
-                chat_id,
-                text[:_MAX_MESSAGE],
-                parse_mode="HTML",
-                disable_web_page_preview=False,
-                reply_markup=reply_markup,
-            ),
+            text,
+            reply_markup,
         )
-        return result if isinstance(result, Message) or result is None else None
+        return cast(Message | None, result)
 
     async def send_text(self, chat_id: int, text: str) -> bool:
-        for chunk in [
-            text[i : i + _MAX_MESSAGE] for i in range(0, len(text), _MAX_MESSAGE)
-        ]:
-            result = await self._run_with_rate_limit(
-                chat_id,
-                "send_text",
-                lambda chunk=chunk: self._bot.send_message(
-                    chat_id, chunk, parse_mode="HTML", disable_web_page_preview=False
-                ),
-            )
+        chunks = [text[i : i + _MAX_MESSAGE] for i in range(0, len(text), _MAX_MESSAGE)]
+        for chunk in chunks:
+            result = await self._send_message(chat_id, "send_text", chunk)
             if result is None:
                 return False
         return True

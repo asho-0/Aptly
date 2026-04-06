@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.logging.structured_logger import setup_daily_logging
 from app.db.session import db
 from app.http import ApiServer
+from app.parsers.site import InBerlinWohnenScraper
 from app.realtime import ExtensionGateway, PairingStore
 from app.scrape_engine import ScraperEngine
 from app.telegram.handlers import UserRegistry
@@ -34,6 +35,7 @@ class Application:
         setup_daily_logging()
         logger.info("Starting bot microservice")
         await db.init()
+        await InBerlinWohnenScraper.warm_shared_resources()
         await self.bot.set_my_commands(
             [
                 BotCommand(command="start", description="Open menu"),
@@ -60,6 +62,7 @@ class Application:
             scrape_task.cancel()
             await self.api_server.stop()
             await self.extension_gateway.stop()
+            await InBerlinWohnenScraper.close_shared_resources()
             await self.bot.session.close()
             await db.close()
             logger.info("Bot microservice stopped")

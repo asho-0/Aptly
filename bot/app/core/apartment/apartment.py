@@ -1,6 +1,6 @@
 import logging
 import typing as t
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import quote
 
 from app.core.enums import SocialStatus
@@ -21,7 +21,7 @@ SPECIAL_CONTENT_MARKERS = (
 )
 
 
-@dataclass
+@dataclass(slots=True)
 class ProcessResult:
     uid: str
     listing_db_id: t.Optional[int]
@@ -30,7 +30,7 @@ class ProcessResult:
     notified: bool
 
 
-@dataclass
+@dataclass(slots=True)
 class ApartmentFilter:
     min_rooms: int | None = None
     max_rooms: int | None = None
@@ -41,15 +41,13 @@ class ApartmentFilter:
     social_status: SocialStatus = SocialStatus.ANY
 
     def is_complete(self) -> bool:
-        return all(
-            [
-                self.min_rooms is not None,
-                self.max_rooms is not None,
-                self.min_sqm is not None,
-                self.max_sqm is not None,
-                self.min_price is not None,
-                self.max_price is not None,
-            ]
+        return (
+            self.min_rooms is not None
+            and self.max_rooms is not None
+            and self.min_sqm is not None
+            and self.max_sqm is not None
+            and self.min_price is not None
+            and self.max_price is not None
         )
 
     def summary(self, lang: str = "en", show_special_listings: bool = False) -> str:
@@ -77,7 +75,7 @@ class ApartmentFilter:
         return "\n".join(lines)
 
 
-@dataclass
+@dataclass(slots=True)
 class Apartment:
     id: str
     source: str
@@ -96,12 +94,39 @@ class Apartment:
     description: str | None = None
     image_url: str | None = None
     published_at: str | None = None
+    _special_content_cache: bool | None = field(
+        init=False, default=None, repr=False, compare=False
+    )
+    _title_lower_cache: str | None = field(
+        init=False, default=None, repr=False, compare=False
+    )
+    _is_wbs_in_title_cache: bool | None = field(
+        init=False, default=None, repr=False, compare=False
+    )
+
+    def _title_lower(self) -> str:
+        if self._title_lower_cache is None:
+            self._title_lower_cache = self.title.lower()
+        return self._title_lower_cache
 
     def is_special_content(self) -> bool:
-        probe = " ".join(
-            part.lower() for part in [self.title, self.description] if part
-        )
-        return any(marker in probe for marker in SPECIAL_CONTENT_MARKERS)
+        if self._special_content_cache is None:
+            probe = " ".join(
+                part.lower() for part in (self.title, self.description) if part
+            )
+            self._special_content_cache = any(
+                marker in probe for marker in SPECIAL_CONTENT_MARKERS
+            )
+        return self._special_content_cache
+
+    def _is_wbs_in_title(self) -> bool:
+        if self._is_wbs_in_title_cache is None:
+            title_lower = self._title_lower()
+            self._is_wbs_in_title_cache = any(
+                word in title_lower
+                for word in ("wbs", "berechtigungsschein", "stypendium")
+            )
+        return self._is_wbs_in_title_cache
 
     def matches(
         self, apartment_filter: ApartmentFilter, show_special_listings: bool = False
@@ -115,49 +140,29 @@ class Apartment:
         if self.price is None:
             return False
 
-        min_p = (
-            apartment_filter.min_price if apartment_filter.min_price is not None else 0
-        )
+        min_p = apartment_filter.min_price if apartment_filter.min_price is not None else 0
         max_p = (
-            apartment_filter.max_price
-            if apartment_filter.max_price is not None
-            else 999999
+            apartment_filter.max_price if apartment_filter.max_price is not None else 999999
         )
 
         if not (min_p <= self.price <= max_p):
             return False
 
         if self.rooms is not None:
-            min_r = (
-                apartment_filter.min_rooms
-                if apartment_filter.min_rooms is not None
-                else 0
-            )
-            max_r = (
-                apartment_filter.max_rooms
-                if apartment_filter.max_rooms is not None
-                else 99
-            )
+            min_r = apartment_filter.min_rooms if apartment_filter.min_rooms is not None else 0
+            max_r = apartment_filter.max_rooms if apartment_filter.max_rooms is not None else 99
             if not (min_r <= self.rooms <= max_r):
                 return False
 
         if self.sqm is not None:
-            min_s = (
-                apartment_filter.min_sqm if apartment_filter.min_sqm is not None else 0
-            )
-            max_s = (
-                apartment_filter.max_sqm
-                if apartment_filter.max_sqm is not None
-                else 999
-            )
+            min_s = apartment_filter.min_sqm if apartment_filter.min_sqm is not None else 0
+            max_s = apartment_filter.max_sqm if apartment_filter.max_sqm is not None else 999
             if not (min_s <= self.sqm <= max_s):
                 return False
 
-        title_lower = self.title.lower()
-        is_wbs_in_title = any(
-            word in title_lower for word in ["wbs", "berechtigungsschein", "stypendium"]
+        is_actually_wbs = (
+            self.social_status == SocialStatus.WBS or self._is_wbs_in_title()
         )
-        is_actually_wbs = self.social_status == SocialStatus.WBS or is_wbs_in_title
 
         if apartment_filter.social_status == SocialStatus.MARKET and is_actually_wbs:
             return False
